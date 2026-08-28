@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>문서 기반 검토 · 도면자동화 v0.1</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="features.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>도면자동화 v0.1</strong><span>문서 기반 설계 검토</span></div>
+    <nav class="main-nav">
+      <a href="index.html">DXF 비교</a>
+      <a href="review.html" class="active">문서 기반 검토</a>
+      <a href="convert.html">DWG 변환</a>
+    </nav>
+    <div></div>
+  </header>
+  <main>
+    <section class="page-intro">
+      <h1>문서 기반 도면 검토</h1>
+      <p>시방서와 자재승인서의 재질·규격·치수·수량·모델명을 도면 표기와 대조합니다.</p>
+    </section>
+    <section class="review-upload-grid">
+      <label class="dropzone">
+        <input id="drawingFile" type="file" accept=".dxf,.pdf">
+        <b>검토 도면</b><span id="drawingName">DXF 또는 PDF 도면 한 개를 선택하세요.</span>
+      </label>
+      <label class="dropzone">
+        <input id="documentFiles" type="file" accept=".pdf,.docx,.txt" multiple>
+        <b>검토 문서</b><span id="documentNames">시방서·승인서 등을 여러 개 선택할 수 있습니다.</span>
+      </label>
+    </section>
+    <section class="review-runbar panel">
+      <span id="reviewStatus">도면과 문서를 선택하세요.</span>
+      <button id="reviewBtn" disabled>문서 기반 검토 실행</button>
+    </section>
+    <section class="review-drawing panel">
+      <div class="review-drawing-head">
+        <h2>검토 도면</h2>
+        <label id="reviewPageControl" hidden>페이지 <select id="reviewPageSelect"></select></label>
+      </div>
+      <div id="reviewDrawingViewer" class="viewer review-viewer"><div class="empty">검토 실행 후 도면이 표시됩니다.</div></div>
+    </section>
+    <section class="document-review panel">
+      <div class="document-head">
+        <div><h2>검토 결과</h2><p id="reviewSummary">분석 결과가 여기에 표시됩니다.</p></div>
+        <div class="review-filter">
+          <button data-review-filter="all" class="active">전체</button>
+          <button data-review-filter="review">검토 필요</button>
+          <button data-review-filter="matched">도면 일치</button>
+        </div>
+      </div>
+      <div id="reviewList" class="review-list"><div class="empty-row">아직 검토를 실행하지 않았습니다.</div></div>
+    </section>
+  </main>
+  <script src="review.js"></script>
+</body>
+</html>

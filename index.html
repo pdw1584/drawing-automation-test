@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>도면자동화 v0.1</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="features.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>도면자동화 v0.1</strong><span>도면 변경 검토 MVP</span></div>
+    <nav class="main-nav">
+      <a href="index.html" class="active">DXF 비교</a>
+      <a href="review.html">문서 기반 검토</a>
+      <a href="convert.html">DWG 변환</a>
+    </nav>
+    <div class="actions">
+      <button id="sampleBtn" class="secondary">샘플 불러오기</button>
+      <button id="exportBtn" class="secondary" disabled>CSV 내보내기</button>
+      <button id="compareBtn">도면 비교</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="upload-grid">
+      <label class="dropzone" id="oldDrop">
+        <input id="oldFile" type="file" accept=".dxf">
+        <b>원본 도면</b><span id="oldName">DXF 파일을 선택하거나 끌어 놓으세요</span>
+      </label>
+      <label class="dropzone" id="newDrop">
+        <input id="newFile" type="file" accept=".dxf">
+        <b>변경 도면</b><span id="newName">DXF 파일을 선택하거나 끌어 놓으세요</span>
+      </label>
+    </section>
+
+    <section class="toolbar">
+      <div id="status">두 DXF 도면을 업로드하세요.</div>
+      <div class="legend"><i class="removed"></i>삭제 <i class="added"></i>추가 <i class="changed"></i>변경</div>
+      <button id="fitBtn" class="secondary small">전체 보기</button>
+      <label id="pageControl" class="page-control" hidden>페이지 <select id="pageSelect"></select></label>
+      <button id="overlayBtn" class="secondary small">겹쳐보기</button>
+      <label class="check"><input id="alignToggle" type="checkbox" checked> 기준점 자동 정렬</label>
+      <span>확대·이동 동기화</span>
+    </section>
+
+    <section class="viewer-grid">
+      <article class="panel"><h2>원본</h2><div id="oldViewer" class="viewer"><div class="empty">원본 도면</div></div></article>
+      <article class="panel"><h2>변경본</h2><div id="newViewer" class="viewer"><div class="empty">변경 도면</div></div></article>
+    </section>
+
+    <section id="overlayPanel" class="panel overlay-panel" hidden>
+      <div class="overlay-head"><h2>겹쳐보기</h2><label>변경본 투명도 <input id="opacityRange" type="range" min="10" max="100" value="60"></label></div>
+      <div id="overlayViewer" class="viewer"><div class="empty">비교 후 겹쳐볼 수 있습니다.</div></div>
+    </section>
+
+    <section class="results panel">
+      <div class="result-head">
+        <div><h2>검토 항목</h2><p id="summary">비교 결과가 여기에 표시됩니다.</p></div>
+        <div class="filters">
+          <button data-filter="all" class="active">전체 <span>0</span></button>
+          <button data-filter="changed">변경 <span>0</span></button>
+          <button data-filter="added">추가 <span>0</span></button>
+          <button data-filter="removed">삭제 <span>0</span></button>
+        </div>
+      </div>
+      <div id="resultList" class="result-list"><div class="empty-row">아직 비교한 도면이 없습니다.</div></div>
+    </section>
+
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DWG 변환 · 도면자동화 v0.1</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="features.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>도면자동화 v0.1</strong><span>DWG → DXF 변환</span></div>
+    <nav class="main-nav">
+      <a href="index.html">DXF 비교</a>
+      <a href="review.html">문서 기반 검토</a>
+      <a href="convert.html" class="active">DWG 변환</a>
+    </nav>
+    <div></div>
+  </header>
+  <main class="narrow-main">
+    <section class="page-intro">
+      <h1>DWG 파일을 DXF로 변환</h1>
+      <p>DWG를 업로드하면 AutoCAD 2018 호환 DXF로 변환해 다운로드합니다.</p>
+    </section>
+    <section class="converter-card panel">
+      <div id="converterState" class="converter-state checking">변환기 연결 상태를 확인하고 있습니다…</div>
+      <label class="converter-drop">
+        <input id="dwgFile" type="file" accept=".dwg" multiple>
+        <span class="converter-icon">DWG</span>
+        <b id="dwgName">변환할 DWG 파일들을 선택하세요.</b>
+        <small>파일은 로컬 분석 서버에서 변환됩니다.</small>
+      </label>
+      <label id="outputNameField" class="output-name-field" hidden>
+        <span>ZIP 저장 파일명</span>
+        <div>
+          <input id="outputName" type="text" placeholder="파일 이름을 입력하세요" disabled>
+          <strong>.zip</strong>
+        </div>
+        <small>변환된 DXF 파일들이 입력한 이름의 ZIP 파일로 저장됩니다.</small>
+      </label>
+      <button id="convertBtn" disabled>선택한 파일 일괄 변환</button>
+      <p id="convertStatus" class="convert-status"></p>
+    </section>
+    <section class="converter-help panel">
+      <h2>변환기 설정</h2>
+      <p>DWG 변환에는 ODA File Converter가 필요합니다. 설치 후 자동 탐지되지 않으면 다음 환경 변수를 지정하고 서버를 다시 실행하세요.</p>
+      <code>$env:ODA_FILE_CONVERTER='실제 설치 주소'</code>
+    </section>
+  </main>
+  <script src="convert.js"></script>
+</body>
+</html>
