@@ -1,5 +1,6 @@
 const DB_NAME = "drawing-automation-equipment";
 const STORE_NAME = "drawings";
+const ANALYSIS_VERSION = 3;
 
 const fileInput = document.querySelector("#renderFile");
 const frame = document.querySelector("#renderFrame");
@@ -77,7 +78,9 @@ function cleanCadText(value) {
     .replace(/\\P/gi, " ")
     .replace(/\\[A-Za-z][^;]*;/g, "")
     .replace(/[{}]/g, "")
-    .replace(/%%[dpc]/gi, "")
+    .replace(/%%[A-Za-z]/g, "")
+    .replace(/\uFFFD/g, "")
+    .replace(/\?{2,}/g, "")
     .replace(/\s+/g, " ")
     .trim()
 }
@@ -94,7 +97,7 @@ function equipmentPriority(name) {
       if (matched) return {priority: index, category: definition.name}
     }
   }
-  return {priority: Number.MAX_SAFE_INTEGER, category: "기타 후보"}
+  return {priority: Number.MAX_SAFE_INTEGER, category: ""}
 }
 
 function equipmentCandidates(textItems) {
@@ -105,8 +108,10 @@ function equipmentCandidates(textItems) {
     if (!/[A-Za-z가-힣]/.test(name) || /^[-+Ø⌀]?\d+(?:[.,x×*/-]\d+)*\s*(?:mm|cm|m|a|v|kw|t)?$/i.test(name)) continue;
     const key = `${name.toUpperCase()}:${item.x.toFixed(2)}:${item.y.toFixed(2)}`;
     if (seen.has(key)) continue;
+    const classification = equipmentPriority(name);
+    if (classification.priority === Number.MAX_SAFE_INTEGER) continue;
     seen.add(key);
-    equipment.push({name, x: item.x, y: item.y, width: item.w, height: item.h, ...equipmentPriority(name)})
+    equipment.push({name, x: item.x, y: item.y, width: item.w, height: item.h, ...classification})
   }
   return equipment.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
 }
@@ -137,7 +142,7 @@ function renderDrawingList() {
     <button class="drawing-card ${drawing.id === activeDrawing?.id ? "active" : ""}" data-id="${drawing.id}">
       <strong>${escapeHtml(drawing.displayName)}</strong>
       <span>${escapeHtml(drawing.originalName)}</span>
-      <small>${escapeHtml(drawing.description || "설명 없음")} · 장비 ${drawing.equipment.length.toLocaleString("ko-KR")}개</small>
+      <small>${escapeHtml(drawing.description || "설명 없음")} · 문서 기준 장비 ${drawing.equipment.length.toLocaleString("ko-KR")}개</small>
     </button>
   `).join("") : '<div class="empty-row">등록된 도면이 없습니다.</div>';
   for (const card of document.querySelectorAll(".drawing-card")) {
@@ -152,7 +157,7 @@ function renderEquipmentList() {
   }
   const query = searchInput.value.trim().toLocaleUpperCase("ko-KR");
   const rows = activeDrawing.equipment.filter(item => !query || item.name.toLocaleUpperCase("ko-KR").includes(query));
-  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 장비 후보 ${activeDrawing.equipment.length.toLocaleString("ko-KR")}개${query ? ` · 검색 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
+  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 문서 기준 장비 ${activeDrawing.equipment.length.toLocaleString("ko-KR")}개${query ? ` · 검색 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
   document.querySelector("#equipmentList").innerHTML = rows.length ? rows.slice(0, 5000).map((item, index) => `
     <button class="equipment-row" data-index="${activeDrawing.equipment.indexOf(item)}">
       <span class="equipment-number">${index + 1}</span>
@@ -202,7 +207,27 @@ async function selectDrawing(id) {
   searchInput.value = "";
   renderDrawingList();
   renderEquipmentList();
-  await renderActiveDrawing()
+  await renderActiveDrawing();
+  if (activeDrawing.analysisVersion !== ANALYSIS_VERSION) void reanalyzeActiveDrawing(true)
+}
+
+async function reanalyzeActiveDrawing(automatic = false) {
+  if (!activeDrawing || reanalyzeButton.disabled) return;
+  reanalyzeButton.disabled = true;
+  document.querySelector("#equipmentSummary").textContent = automatic ? "기존 장비 목록을 문서 기준으로 자동 정리하고 있습니다…" : "한글 코드페이지와 문서 우선순위 기준으로 장비를 다시 분석하고 있습니다…";
+  try {
+    const analysis = await analyzeDxf(activeDrawing.file);
+    activeDrawing.equipment = analysis.equipment;
+    activeDrawing.codepage = analysis.codepage;
+    activeDrawing.analysisVersion = ANALYSIS_VERSION;
+    await saveDrawing(activeDrawing);
+    renderDrawingList();
+    renderEquipmentList()
+  } catch (error) {
+    document.querySelector("#equipmentSummary").textContent = `장비 재분석 실패: ${error.message}`
+  } finally {
+    reanalyzeButton.disabled = false
+  }
 }
 
 async function registerSelectedDrawing() {
@@ -221,6 +246,7 @@ async function registerSelectedDrawing() {
       file: selectedFile,
       equipment: analysis.equipment,
       codepage: analysis.codepage,
+      analysisVersion: ANALYSIS_VERSION,
       createdAt: new Date().toISOString()
     };
     await saveDrawing(drawing);
@@ -230,7 +256,7 @@ async function registerSelectedDrawing() {
     displayNameInput.value = "";
     descriptionInput.value = "";
     document.querySelector("#selectedFileName").textContent = "대용량 파일도 브라우저에서 직접 처리합니다.";
-    document.querySelector("#registerStatus").textContent = `등록 완료: 장비 후보 ${drawing.equipment.length.toLocaleString("ko-KR")}개를 찾았습니다.`;
+    document.querySelector("#registerStatus").textContent = `등록 완료: 문서 기준 장비 ${drawing.equipment.length.toLocaleString("ko-KR")}개를 찾았습니다.`;
     updateRegisterButton();
     await selectDrawing(drawing.id)
   } catch (error) {
@@ -251,23 +277,7 @@ displayNameInput.oninput = updateRegisterButton;
 registerButton.onclick = registerSelectedDrawing;
 fitButton.onclick = () => frame.contentWindow?.postMessage({type: "cad-renderer-fit", side: "equipment"}, window.location.origin);
 searchInput.oninput = renderEquipmentList;
-reanalyzeButton.onclick = async () => {
-  if (!activeDrawing) return;
-  reanalyzeButton.disabled = true;
-  document.querySelector("#equipmentSummary").textContent = "한글 코드페이지와 문서 우선순위 기준으로 장비를 다시 분석하고 있습니다…";
-  try {
-    const analysis = await analyzeDxf(activeDrawing.file);
-    activeDrawing.equipment = analysis.equipment;
-    activeDrawing.codepage = analysis.codepage;
-    await saveDrawing(activeDrawing);
-    renderDrawingList();
-    renderEquipmentList()
-  } catch (error) {
-    document.querySelector("#equipmentSummary").textContent = `장비 재분석 실패: ${error.message}`
-  } finally {
-    reanalyzeButton.disabled = false
-  }
-};
+reanalyzeButton.onclick = () => reanalyzeActiveDrawing();
 deleteButton.onclick = async () => {
   if (!activeDrawing || !confirm(`“${activeDrawing.displayName}” 도면을 브라우저 저장소에서 삭제할까요?`)) return;
   const deletedId = activeDrawing.id;
@@ -280,7 +290,7 @@ deleteButton.onclick = async () => {
   searchInput.disabled = true;
   document.querySelector("#activeDrawingName").textContent = "도면을 선택하세요";
   document.querySelector("#activeDrawingDescription").textContent = "";
-  document.querySelector("#equipmentSummary").textContent = "도면을 선택하면 장비 후보가 표시됩니다.";
+  document.querySelector("#equipmentSummary").textContent = "도면을 선택하면 문서 기준 장비가 표시됩니다.";
   renderDrawingList();
   renderEquipmentList();
   setStatus("도면을 선택하세요", "waiting")
