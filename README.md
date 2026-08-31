@@ -23,7 +23,7 @@ npm start
 - `index.html`: DWG/DXF 두 도면 표시와 DXF 변경 비교
 - `review.html`: DXF/PDF 도면과 시방서·자재승인서 대조
 - `convert.html`: DWG 파일을 DXF로 변환
-- `render-test.html`: 비교 분석 없이 DWG/DXF 렌더러만 단독 시험
+- `render-test.html`: 층별 DXF 등록, 장비명 추출 및 장비 위치 탐색
 - DWG는 한 번에 최대 50개까지 선택할 수 있으며, 여러 결과는 ZIP으로 다운로드됩니다.
 - 한 파일은 원본 이름의 DXF로 저장되고, 여러 파일은 사용자가 지정한 이름의 ZIP으로 저장됩니다.
 

@@ -3,54 +3,69 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>렌더링 테스트 · 도면자동화 v0.1</title>
+  <title>층별 장비 위치 · 도면자동화 v0.1</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="features.css">
 </head>
 <body>
   <header class="topbar">
-    <div><strong>도면자동화 v0.1</strong><span>CAD 렌더러 단독 테스트</span></div>
+    <div><strong>도면자동화 v0.1</strong><span>층별 도면 및 장비 위치</span></div>
     <nav class="main-nav">
       <a href="index.html">도면 비교</a>
       <a href="review.html">문서 기반 검토</a>
       <a href="convert.html">DWG → DXF 변환</a>
-      <a href="render-test.html" class="active">렌더링 테스트</a>
+      <a href="render-test.html" class="active">층별 장비 위치</a>
     </nav>
     <div></div>
   </header>
 
-  <main class="render-test-main">
-    <section class="page-intro render-test-intro">
+  <main class="equipment-main">
+    <section class="page-intro equipment-intro">
       <div>
-        <h1>DWG/DXF 렌더링 테스트</h1>
-        <p>비교 분석 없이 mlightcad와 LibreDWG 렌더러의 파일 호환성과 로딩 성능만 확인합니다.</p>
+        <h1>층별 장비 위치</h1>
+        <p>지하층, 1~6층, 옥상, 운영동 등의 DXF를 등록하고 도면 문자에서 추출한 장비 위치를 확인합니다.</p>
       </div>
       <div class="render-test-actions">
         <button id="renderFitBtn" class="secondary" disabled>전체 보기</button>
-        <button id="renderReloadBtn" class="secondary" disabled>다시 렌더링</button>
+        <button id="deleteDrawingBtn" class="danger" disabled>선택 도면 삭제</button>
       </div>
     </section>
 
-    <section class="render-test-upload panel">
-      <label class="render-file-picker">
-        <input id="renderFile" type="file" accept=".dwg,.dxf">
-        <span class="converter-icon">CAD</span>
-        <span><b>DWG 또는 DXF 파일 선택</b><small>파일은 서버에 업로드되지 않고 브라우저에서 처리됩니다.</small></span>
-      </label>
-      <dl class="render-metrics">
-        <div><dt>파일</dt><dd id="renderFileName">선택되지 않음</dd></div>
-        <div><dt>형식</dt><dd id="renderFormat">-</dd></div>
-        <div><dt>크기</dt><dd id="renderSize">-</dd></div>
-        <div><dt>로딩 시간</dt><dd id="renderDuration">-</dd></div>
-      </dl>
+    <section class="equipment-register panel">
+      <div class="equipment-form-grid">
+        <label class="render-file-picker">
+          <input id="renderFile" type="file" accept=".dxf">
+          <span class="converter-icon">DXF</span>
+          <span><b>층별 DXF 파일 선택</b><small id="selectedFileName">대용량 파일도 브라우저에서 직접 처리합니다.</small></span>
+        </label>
+        <label><span>표시 이름</span><input id="drawingDisplayName" type="text" placeholder="예: 지하 1층, 옥상, 운영동"></label>
+        <label class="equipment-description"><span>설명</span><textarea id="drawingDescription" rows="2" placeholder="도면이나 해당 층에 대한 설명을 입력하세요."></textarea></label>
+        <button id="registerDrawingBtn" disabled>도면 등록</button>
+      </div>
+      <p id="registerStatus" class="equipment-register-status">등록한 도면과 장비 목록은 이 브라우저에 저장됩니다.</p>
     </section>
 
-    <section class="render-test-stage panel">
-      <div class="render-stage-head">
-        <h2>렌더링 화면</h2>
-        <span id="renderStatus" class="render-status waiting">렌더러를 준비하고 있습니다…</span>
+    <section class="equipment-workspace">
+      <aside class="panel drawing-library">
+        <div class="equipment-panel-head"><h2>등록 도면</h2><span id="drawingCount">0개</span></div>
+        <div id="drawingList" class="drawing-list"><div class="empty-row">등록된 도면이 없습니다.</div></div>
+      </aside>
+
+      <section class="render-test-stage panel">
+        <div class="render-stage-head">
+          <div><h2 id="activeDrawingName">도면을 선택하세요</h2><p id="activeDrawingDescription"></p></div>
+          <span id="renderStatus" class="render-status waiting">렌더러를 준비하고 있습니다…</span>
+        </div>
+        <iframe id="renderFrame" class="render-test-frame" src="/cad-frame.html?runtime=20260831-2&mode=equipment" allow="unload" title="층별 DXF 장비 위치 도면"></iframe>
+      </section>
+    </section>
+
+    <section class="panel equipment-results">
+      <div class="equipment-results-head">
+        <div><h2>장비 목록</h2><p id="equipmentSummary">도면을 선택하면 장비 후보가 표시됩니다.</p></div>
+        <input id="equipmentSearch" type="search" placeholder="장비명 검색" disabled>
       </div>
-      <iframe id="renderFrame" class="render-test-frame" src="/cad-frame.html?runtime=20260831-2&mode=test" allow="unload" title="DWG 및 DXF 렌더링 테스트"></iframe>
+      <div id="equipmentList" class="equipment-list"><div class="empty-row">선택된 도면이 없습니다.</div></div>
     </section>
   </main>
   <script type="module" src="render-test.js"></script>
