@@ -34,6 +34,7 @@ export function detectDxfEncoding(buffer) {
 }
 
 export function decodeDxfBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
   const detected = detectDxfEncoding(buffer);
   let decoder;
   try {
@@ -42,7 +43,18 @@ export function decodeDxfBuffer(buffer) {
     detected.encoding = "utf-8";
     decoder = new TextDecoder("utf-8")
   }
-  const text = decoder.decode(buffer).replace(/\\U\+([0-9A-F]{4,8})/gi, (match, hexadecimal) => {
+  let decodedText = decoder.decode(buffer);
+  if (detected.encoding !== "euc-kr" && bytes.some(byte => byte >= 0x80)) {
+    const koreanCandidate = new TextDecoder("euc-kr").decode(buffer);
+    const hangulCount = value => (value.match(/[가-힣]/g) || []).length;
+    const currentHangul = hangulCount(decodedText), candidateHangul = hangulCount(koreanCandidate);
+    if (candidateHangul >= 2 && candidateHangul > currentHangul * 2 + 1) {
+      decodedText = koreanCandidate;
+      detected.encoding = "euc-kr";
+      detected.codepage = `${detected.codepage} → CP949 보정`
+    }
+  }
+  const text = decodedText.replace(/\\U\+([0-9A-F]{4,8})/gi, (match, hexadecimal) => {
     const codePoint = Number.parseInt(hexadecimal, 16);
     try {
       return String.fromCodePoint(codePoint)

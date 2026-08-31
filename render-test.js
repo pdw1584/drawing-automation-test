@@ -6,6 +6,7 @@ const frame = document.querySelector("#renderFrame");
 const statusElement = document.querySelector("#renderStatus");
 const fitButton = document.querySelector("#renderFitBtn");
 const deleteButton = document.querySelector("#deleteDrawingBtn");
+const reanalyzeButton = document.querySelector("#reanalyzeDrawingBtn");
 const registerButton = document.querySelector("#registerDrawingBtn");
 const displayNameInput = document.querySelector("#drawingDisplayName");
 const descriptionInput = document.querySelector("#drawingDescription");
@@ -17,6 +18,13 @@ let activeDrawing;
 let rendererReady = false;
 let renderGeneration = 0;
 let startedAt = 0;
+let equipmentPriorities = [];
+
+async function loadEquipmentPriorities() {
+  const response = await fetch("/equipment-priority.json", {cache: "no-store"});
+  if (!response.ok) throw new Error("장비 우선순위 사전을 불러오지 못했습니다.");
+  equipmentPriorities = await response.json()
+}
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -74,6 +82,21 @@ function cleanCadText(value) {
     .trim()
 }
 
+function equipmentPriority(name) {
+  const upperName = name.toLocaleUpperCase("ko-KR");
+  for (let index = 0; index < equipmentPriorities.length; index++) {
+    const definition = equipmentPriorities[index];
+    for (const rawAlias of definition.aliases) {
+      const alias = rawAlias.toLocaleUpperCase("ko-KR").trim();
+      const matched = alias.length <= 3
+        ? new RegExp(`(^|[^A-Z0-9가-힣])${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Z0-9가-힣]|$)`).test(upperName)
+        : upperName.replace(/[\s_-]/g, "").includes(alias.replace(/[\s_-]/g, ""));
+      if (matched) return {priority: index, category: definition.name}
+    }
+  }
+  return {priority: Number.MAX_SAFE_INTEGER, category: "기타 후보"}
+}
+
 function equipmentCandidates(textItems) {
   const seen = new Set(), equipment = [];
   for (const item of textItems || []) {
@@ -83,9 +106,9 @@ function equipmentCandidates(textItems) {
     const key = `${name.toUpperCase()}:${item.x.toFixed(2)}:${item.y.toFixed(2)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    equipment.push({name, x: item.x, y: item.y, width: item.w, height: item.h})
+    equipment.push({name, x: item.x, y: item.y, width: item.w, height: item.h, ...equipmentPriority(name)})
   }
-  return equipment.sort((a, b) => a.name.localeCompare(b.name, "ko", {numeric: true}))
+  return equipment.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
 }
 
 function analyzeDxf(file) {
@@ -133,7 +156,7 @@ function renderEquipmentList() {
   document.querySelector("#equipmentList").innerHTML = rows.length ? rows.slice(0, 5000).map((item, index) => `
     <button class="equipment-row" data-index="${activeDrawing.equipment.indexOf(item)}">
       <span class="equipment-number">${index + 1}</span>
-      <strong>${escapeHtml(item.name)}</strong>
+      <strong>${escapeHtml(item.name)}${Number.isFinite(item.priority) && item.priority < Number.MAX_SAFE_INTEGER ? `<em>${escapeHtml(item.category)}</em>` : ""}</strong>
       <span>X ${item.x.toFixed(2)} · Y ${item.y.toFixed(2)}</span>
     </button>
   `).join("") : '<div class="empty-row">해당 장비명이 없습니다.</div>';
@@ -174,6 +197,7 @@ async function selectDrawing(id) {
   document.querySelector("#activeDrawingName").textContent = activeDrawing.displayName;
   document.querySelector("#activeDrawingDescription").textContent = `${activeDrawing.originalName} · ${formatBytes(activeDrawing.file.size)} · ${activeDrawing.codepage || "코드페이지 미확인"}${activeDrawing.description ? ` · ${activeDrawing.description}` : ""}`;
   deleteButton.disabled = false;
+  reanalyzeButton.disabled = false;
   searchInput.disabled = false;
   searchInput.value = "";
   renderDrawingList();
@@ -186,6 +210,7 @@ async function registerSelectedDrawing() {
   registerButton.disabled = true;
   document.querySelector("#registerStatus").textContent = "DXF에서 장비 이름과 위치를 분석하고 있습니다…";
   try {
+    if (!equipmentPriorities.length) await loadEquipmentPriorities();
     if (navigator.storage?.persist) await navigator.storage.persist();
     const analysis = await analyzeDxf(selectedFile);
     const drawing = {
@@ -226,6 +251,23 @@ displayNameInput.oninput = updateRegisterButton;
 registerButton.onclick = registerSelectedDrawing;
 fitButton.onclick = () => frame.contentWindow?.postMessage({type: "cad-renderer-fit", side: "equipment"}, window.location.origin);
 searchInput.oninput = renderEquipmentList;
+reanalyzeButton.onclick = async () => {
+  if (!activeDrawing) return;
+  reanalyzeButton.disabled = true;
+  document.querySelector("#equipmentSummary").textContent = "한글 코드페이지와 문서 우선순위 기준으로 장비를 다시 분석하고 있습니다…";
+  try {
+    const analysis = await analyzeDxf(activeDrawing.file);
+    activeDrawing.equipment = analysis.equipment;
+    activeDrawing.codepage = analysis.codepage;
+    await saveDrawing(activeDrawing);
+    renderDrawingList();
+    renderEquipmentList()
+  } catch (error) {
+    document.querySelector("#equipmentSummary").textContent = `장비 재분석 실패: ${error.message}`
+  } finally {
+    reanalyzeButton.disabled = false
+  }
+};
 deleteButton.onclick = async () => {
   if (!activeDrawing || !confirm(`“${activeDrawing.displayName}” 도면을 브라우저 저장소에서 삭제할까요?`)) return;
   const deletedId = activeDrawing.id;
@@ -233,6 +275,7 @@ deleteButton.onclick = async () => {
   drawings = drawings.filter(drawing => drawing.id !== deletedId);
   activeDrawing = undefined;
   deleteButton.disabled = true;
+  reanalyzeButton.disabled = true;
   fitButton.disabled = true;
   searchInput.disabled = true;
   document.querySelector("#activeDrawingName").textContent = "도면을 선택하세요";
@@ -264,7 +307,12 @@ window.addEventListener("message", event => {
 
 async function initialize() {
   try {
+    await loadEquipmentPriorities();
     drawings = (await getDrawings()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const drawing of drawings) {
+      drawing.equipment = (drawing.equipment || []).map(item => ({...item, ...equipmentPriority(item.name)}))
+        .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
+    }
     renderDrawingList();
     if (drawings[0]) await selectDrawing(drawings[0].id)
   } catch (error) {
