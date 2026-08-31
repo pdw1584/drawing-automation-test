@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "build": "vite build",
     "dev": "vite --host 127.0.0.1",
@@ -10,11 +13,11 @@
     "start": "npm run build && python server.py"
   },
   "dependencies": {
-    "@mlightcad/cad-simple-viewer": "latest",
-    "@mlightcad/data-model": "latest",
-    "@mlightcad/libredwg-converter": "latest"
+    "@mlightcad/cad-simple-viewer": "1.6.3",
+    "@mlightcad/data-model": "1.14.3",
+    "@mlightcad/libredwg-converter": "3.14.3"
   },
   "devDependencies": {
-    "vite": "latest"
+    "vite": "8.2.2"
   }
 }

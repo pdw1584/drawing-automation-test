@@ -1,3 +1,5 @@
+import { focusCadViews, renderCadFile } from "./cad-renderer.js";
+
 "use strict";
 
 const state = {
@@ -22,6 +24,22 @@ function escapeHtml(value) {
     '"': "&quot;",
     "'": "&#39;"
   })[character])
+}
+
+function extractDxfReviewData(file) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./review-dxf-worker.js", import.meta.url), {type: "module"});
+    worker.onmessage = event => {
+      worker.terminate();
+      if (event.data?.error) reject(new Error(event.data.error));
+      else resolve(event.data)
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message || "DXF 문자 추출 Worker 실행에 실패했습니다."))
+    };
+    worker.postMessage({file})
+  })
 }
 // 도면 검토 체크
 function updateReadyState() {
@@ -88,14 +106,7 @@ function renderDrawingPreview() {
     const viewBox = focus ? `${Math.max(0,focus.x-focusSize/2)} ${Math.max(0,focus.y-focusSize/2)} ${focusSize} ${focusSize}` : `0 0 ${page.width} ${page.height}`;
     host.innerHTML = `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet"><image href="${page.image}" width="${page.width}" height="${page.height}"/>${marker}</svg>`;
     if (!state.view) state.view = {x: 0, y: 0, w: page.width, h: page.height}
-  } else {
-    const bounds = drawing.bounds;
-    const width = Math.max(1, bounds.maxX - bounds.minX), height = Math.max(1, bounds.maxY - bounds.minY), pad = Math.max(width, height) * .06;
-    const marker = state.selectedLocation ? `<circle class="review-location-marker" cx="${state.selectedLocation.x}" cy="${-state.selectedLocation.y}" r="${Math.max(width,height)*.018}"/>` : "";
-    const focusSize = state.selectedLocation ? Math.max(Math.max(width,height)*.18, 20) : 0;
-    const viewBox = state.selectedLocation ? `${state.selectedLocation.x-focusSize/2} ${-state.selectedLocation.y-focusSize/2} ${focusSize} ${focusSize}` : `${bounds.minX-pad} ${-bounds.maxY-pad} ${width+pad*2} ${height+pad*2}`;
-    host.innerHTML = `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet"><g class="review-dxf-entities">${drawing.entities.map(dxfEntitySvg).join("")}</g>${marker}</svg>`
-  }
+  } else if (state.drawing) renderCadFile("review", state.drawing, "#reviewDrawingViewer")
 }
 
 function focusLocation(location) {
@@ -104,7 +115,9 @@ function focusLocation(location) {
     state.page = location.page;
     $("#reviewPageSelect").value = String(location.page)
   }
-  renderDrawingPreview();
+  if (state.drawingPreview.type === "dxf") {
+    focusCadViews({review: {x: location.x, y: location.y}})
+  } else renderDrawingPreview();
   const marker = $(".review-location-marker");
   marker?.scrollIntoView({behavior: "smooth", block: "center"})
 }
@@ -114,8 +127,14 @@ async function runReview() {
   $("#reviewStatus").textContent = "도면 문자와 문서 요구사항을 분석하고 있습니다…";
   try {
     const form = new FormData();
-    form.append("drawing", state.drawing);
     form.append("drawingName", state.drawing.name);
+    if (state.drawing.name.toLowerCase().endsWith(".dxf")) {
+      $("#reviewStatus").textContent = "대형 DXF에서 문자와 위치를 추출하고 있습니다…";
+      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+      const extracted = await extractDxfReviewData(state.drawing);
+      form.append("drawingText", extracted.drawingText);
+      form.append("drawingPreview", JSON.stringify(extracted.preview))
+    } else form.append("drawing", state.drawing);
     form.append("names", JSON.stringify(state.documents.map(file => file.name)));
     state.documents.forEach((file, index) => form.append(`doc${index}`, file));
     const response = await fetch("/api/review", {
@@ -140,7 +159,7 @@ async function runReview() {
     $("#reviewStatus").textContent = "문서 기반 검토를 완료했습니다.";
     renderFindings()
   } catch (error) {
-    $("#reviewStatus").textContent = error.message
+    $("#reviewStatus").textContent = error instanceof TypeError ? "검토 서버 연결이 중단되었습니다. 서버가 실행 중인지와 PowerShell 창의 오류 메시지를 확인하세요." : error.message
   } finally {
     $("#reviewBtn").disabled = false
   }
@@ -149,6 +168,11 @@ async function runReview() {
 $("#drawingFile").onchange = event => {
   state.drawing = event.target.files[0] || null;
   $("#drawingName").textContent = state.drawing ? `${state.drawing.name} · ${(state.drawing.size / 1024 / 1024).toFixed(2)}MB` : "DXF 또는 PDF 도면 한 개를 선택하세요.";
+  if (state.drawing?.name.toLowerCase().endsWith(".dxf")) {
+    renderCadFile("review", state.drawing, "#reviewDrawingViewer")
+  } else if (state.drawing) {
+    $("#reviewDrawingViewer").innerHTML = '<div class="empty">검토 실행 후 PDF 도면이 표시됩니다.</div>'
+  }
   updateReadyState()
 };
 

@@ -23,7 +23,7 @@ import fitz
 
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "dist" if (ROOT / "dist" / "index.html").is_file() else ROOT
-MAX_UPLOAD = 80 * 1024 * 1024
+MAX_UPLOAD = int(os.environ.get("DRAWING_AUTOMATION_MAX_UPLOAD", "0"))
 
 
 def parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
@@ -119,6 +119,74 @@ def extract_dxf_text(data: bytes) -> str:
             if value:
                 values.append(value)
     return "\n".join(values)
+
+
+def dxf_review_preview(data: bytes) -> dict:
+    """Extract drawing text and top-level text locations without expanding CAD geometry."""
+    lines = data.decode("utf-8", errors="replace").replace("\r", "").split("\n")
+    text_items: list[dict] = []
+    all_text: list[str] = []
+    section = None
+    awaiting_section_name = False
+    current = None
+    block_count = 0
+
+    def finish() -> None:
+        nonlocal current
+        if not current:
+            return
+        text = "".join(current["text"]).strip()
+        if text:
+            all_text.append(text)
+            if current["section"] == "ENTITIES":
+                text_items.append({
+                    "text": text,
+                    "page": 1,
+                    "x": current["x"],
+                    "y": current["y"],
+                    "w": max(8, len(text) * max(current["height"], 1) * 0.6),
+                    "h": max(4, current["height"]),
+                })
+        current = None
+
+    for index in range(0, len(lines) - 1, 2):
+        code, value = lines[index].strip(), lines[index + 1].strip()
+        if code == "0":
+            finish()
+            if value == "SECTION":
+                awaiting_section_name = True
+                section = None
+                continue
+            if value == "ENDSEC":
+                section = None
+                continue
+            if section == "BLOCKS" and value == "BLOCK":
+                block_count += 1
+            if section in {"ENTITIES", "BLOCKS"} and value in {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}:
+                current = {"section": section, "text": [], "x": 0.0, "y": 0.0, "height": 3.0}
+            continue
+        if awaiting_section_name and code == "2":
+            section = value
+            awaiting_section_name = False
+            continue
+        if not current:
+            continue
+        if code in {"1", "3"}:
+            current["text"].append(value)
+        elif code == "10":
+            current["x"] = float(value or 0)
+        elif code == "20":
+            current["y"] = float(value or 0)
+        elif code == "40":
+            current["height"] = float(value or 3)
+    finish()
+    return {
+        "type": "dxf",
+        "bounds": {"minX": 0, "minY": 0, "maxX": 100, "maxY": 100},
+        "textItems": text_items,
+        "blockCount": block_count,
+        "_drawingText": "\n".join(all_text),
+    }
 
 
 def extract_drawing_text(data: bytes, filename: str) -> str:
@@ -278,16 +346,22 @@ def transform_dxf_block_entity(source: dict, insert: dict, base: dict) -> dict:
     return entity
 
 
-def expand_dxf_blocks(entities: list[dict], blocks: dict, depth: int = 0) -> list[dict]:
-    if depth > 8:
-        return entities
-    expanded = []
-    for entity in entities:
+def expand_dxf_blocks(entities: list[dict], blocks: dict, max_entities: int = 1_000_000) -> list[dict]:
+    expanded: list[dict] = []
+    stack = [(entity, frozenset()) for entity in reversed(entities)]
+    while stack and len(expanded) < max_entities:
+        entity, ancestry = stack.pop()
         expanded.append(entity)
-        definition = blocks.get(entity.get("block")) if entity.get("type") == "INSERT" else None
-        if definition:
-            children = [transform_dxf_block_entity(child, entity, definition["base"]) for child in definition["entities"]]
-            expanded.extend(expand_dxf_blocks(children, blocks, depth + 1))
+        block_name = entity.get("block") if entity.get("type") == "INSERT" else None
+        definition = blocks.get(block_name)
+        if not definition or block_name in ancestry:
+            continue
+        next_ancestry = ancestry | {block_name}
+        children = [
+            transform_dxf_block_entity(child, entity, definition["base"])
+            for child in definition["entities"]
+        ]
+        stack.extend((child, next_ancestry) for child in reversed(children))
     return expanded
 
 
@@ -380,11 +454,18 @@ def review_documents(fields: dict[str, bytes]) -> dict:
     names = json.loads(fields.get("names", b"[]").decode("utf-8"))
     drawing_text = fields.get("drawingText", b"").decode("utf-8", errors="replace")
     preview = None
+    if fields.get("drawingPreview"):
+        preview = json.loads(fields["drawingPreview"].decode("utf-8"))
     if fields.get("drawing"):
         drawing_name = fields.get("drawingName", b"drawing.dxf").decode("utf-8", errors="replace")
-        preview = drawing_preview(fields["drawing"], drawing_name)
+        if Path(drawing_name).suffix.lower() == ".dxf":
+            preview = dxf_review_preview(fields["drawing"])
+            lightweight_drawing_text = preview.pop("_drawingText", "")
+        else:
+            preview = drawing_preview(fields["drawing"], drawing_name)
+            lightweight_drawing_text = ""
         if not drawing_text.strip():
-            drawing_text = "\n".join(item["text"] for item in preview["textItems"])
+            drawing_text = lightweight_drawing_text or "\n".join(item["text"] for item in preview["textItems"])
     drawing_normalized = normalized(drawing_text)
     findings, seen = [], set()
 
@@ -421,6 +502,13 @@ def review_documents(fields: dict[str, bytes]) -> dict:
                                 "h": item["h"],
                             } for item in (preview or {}).get("textItems", []) if normalized(value) in normalized(item["text"])), None),
                         })
+    if preview and preview.get("type") == "dxf":
+        preview = {
+            "type": "dxf",
+            "bounds": preview["bounds"],
+            "textItems": preview["textItems"],
+            "blockCount": preview["blockCount"],
+        }
     return {
         "findings": findings,
         "summary": {
@@ -520,6 +608,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
+        self.send_header("Permissions-Policy", "unload=(self)")
         super().end_headers()
 
     def do_POST(self) -> None:
@@ -529,8 +618,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > MAX_UPLOAD:
-                raise ValueError("업로드 크기는 80MB 이하여야 합니다.")
+            if length <= 0:
+                raise ValueError("업로드 데이터가 없습니다.")
+            if MAX_UPLOAD > 0 and length > MAX_UPLOAD:
+                raise ValueError(f"업로드 크기는 {MAX_UPLOAD / 1024 / 1024:.0f}MB 이하여야 합니다.")
             fields = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(length))
             if request_path == "/api/dwg/convert":
                 names = json.loads(fields.get("names", b"[]").decode("utf-8"))

@@ -5,7 +5,15 @@ DWG/DXF 도면을 브라우저에서 렌더링하고, DXF 변경 위치를 좌�
 ## 실행
 
 ```powershell
-python server.py
+python -m pip install -r requirements.txt
+npm install
+npm start
+```
+
+이미 의존성을 설치했다면 다음 명령만 실행합니다.
+
+```powershell
+npm start
 ```
 
 브라우저에서 `http://localhost:8000`을 열고 **샘플 불러오기** 또는 DWG/DXF 파일을 선택합니다.
@@ -60,6 +68,9 @@ npm start
 
 Python 서버는 `dist/index.html`이 있으면 빌드 결과를 우선 제공합니다. DWG 파서는
 GPL-3.0인 `@mlightcad/libredwg-converter`를 별도 Web Worker에서 실행합니다.
+
+업로드 크기는 기본적으로 제한하지 않습니다. 운영 환경에서 상한이 필요하면
+`DRAWING_AUTOMATION_MAX_UPLOAD` 환경 변수에 바이트 단위 제한값을 지정할 수 있습니다.
 
 `index.html`을 파일로 직접 열거나 VS Code Live Server로 원본 폴더를 제공하면 npm의
 bare module import를 해석할 수 없습니다. 전체 앱은 반드시 `npm start`로 실행하고

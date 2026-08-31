@@ -19,6 +19,8 @@ let boundView;
 let suppressViewBroadcast = false;
 let viewPostQueued = false;
 let markerTimer;
+let hasOpenedDocument = false;
+let openQueue = Promise.resolve();
 
 function preventBrowserMiddleMouse(event) {
   if (event.button !== 1) return;
@@ -109,6 +111,10 @@ async function openDrawing(message) {
   const docManager = await initialize();
   currentSide = message.side || currentSide;
   showStatus(`${message.name} 불러오는 중…`);
+  if (hasOpenedDocument) {
+    await docManager.closeDocument();
+    hasOpenedDocument = false
+  }
   const isDwg = message.name.toLowerCase().endsWith(".dwg");
   if (isDwg && !(await docManager.areWorkersReady())) {
     throw new Error("LibreDWG Worker 또는 WebAssembly 파일에 접근할 수 없습니다.");
@@ -118,6 +124,7 @@ async function openDrawing(message) {
     readOnly: true
   });
   if (opened === false) throw new Error("도면을 열지 못했습니다.");
+  hasOpenedDocument = true;
   docManager.sendStringToExecute("zoom\nall");
   bindViewSync();
   showStatus("");
@@ -133,7 +140,11 @@ window.addEventListener("message", async event => {
   const message = event.data;
   if (!message || typeof message !== "object") return;
   try {
-    if (message.type === "cad-renderer-load") await openDrawing(message);
+    if (message.type === "cad-renderer-load") {
+      const task = openQueue.then(() => openDrawing(message));
+      openQueue = task.catch(() => {});
+      await task
+    }
     if (message.type === "cad-renderer-fit") {
       const docManager = await initialize();
       docManager.sendStringToExecute("zoom\nall");
@@ -156,3 +167,7 @@ window.addEventListener("message", async event => {
 initialize()
   .then(() => window.parent.postMessage({ type: "cad-renderer-ready" }, window.location.origin))
   .catch(error => showStatus(`초기화 실패: ${error.message}`));
+
+window.addEventListener("pagehide", () => {
+  if (manager) void manager.destroy()
+});

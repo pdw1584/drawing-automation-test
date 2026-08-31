@@ -7,6 +7,7 @@ const reloadButton = document.querySelector("#renderReloadBtn");
 let selectedFile;
 let rendererReady = false;
 let startedAt = 0;
+let renderGeneration = 0;
 
 function setStatus(message, kind) {
   statusElement.textContent = message;
@@ -20,16 +21,19 @@ function formatBytes(bytes) {
 
 async function renderSelectedFile() {
   if (!selectedFile || !rendererReady || !frame.contentWindow) return;
+  const file = selectedFile;
+  const generation = ++renderGeneration;
   setStatus("도면을 해석하고 렌더링하는 중…", "loading");
   document.querySelector("#renderDuration").textContent = "측정 중";
   fitButton.disabled = true;
   reloadButton.disabled = true;
   startedAt = performance.now();
-  const buffer = await selectedFile.arrayBuffer();
+  const buffer = await file.arrayBuffer();
+  if (generation !== renderGeneration || file !== selectedFile) return;
   frame.contentWindow.postMessage({
     type: "cad-renderer-load",
     side: "test",
-    name: selectedFile.name,
+    name: file.name,
     buffer
   }, window.location.origin, [buffer]);
 }

@@ -1,4 +1,5 @@
-import { fitCadViews, focusCadViews, renderCadFile, setCadViewSync } from "./cad-renderer.js";
+import { fitCadViews, focusCadViews, renderCadFile, setCadViewAlignment, setCadViewSync } from "./cad-renderer.js";
+import { decodeDxfFile } from "./dxf-encoding.js";
 
 "use strict";
 
@@ -27,6 +28,7 @@ const state = {
 };
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
+const RESULT_RENDER_LIMIT = 2000;
 
 function pairs(text) {
   const lines = text.replace(/\r/g, "").split("\n"),
@@ -89,16 +91,37 @@ function transformBlockEntity(source, insert, base) {
   return entity
 }
 
-function expandBlockEntities(entities, blocks, depth = 0) {
-  if (depth > 8) return entities;
+function expandBlockEntities(entities, blocks, options = {}) {
+  const maxDepth = options.maxDepth ?? 32;
+  const maxEntities = options.maxEntities ?? 1000000;
   const expanded = [];
-  for (const entity of entities) {
-    expanded.push(entity);
-    if (entity.type !== "INSERT" || !blocks.has(entity.block)) continue;
-    const definition = blocks.get(entity.block), children = definition.entities.map(child => transformBlockEntity(child, entity, definition.base));
-    expanded.push(...expandBlockEntities(children, blocks, depth + 1))
+  const stack = [];
+  let circularReferences = 0;
+  let omittedEntities = 0;
+  for (let index = entities.length - 1; index >= 0; index--) {
+    stack.push({entity: entities[index], depth: 0, ancestry: new Set()})
   }
-  return expanded
+  while (stack.length && expanded.length < maxEntities) {
+    const item = stack.pop();
+    expanded.push(item.entity);
+    if (item.entity.type !== "INSERT" || !blocks.has(item.entity.block)) continue;
+    if (item.depth >= maxDepth || item.ancestry.has(item.entity.block)) {
+      circularReferences++;
+      continue
+    }
+    const definition = blocks.get(item.entity.block);
+    const ancestry = new Set(item.ancestry);
+    ancestry.add(item.entity.block);
+    for (let index = definition.entities.length - 1; index >= 0; index--) {
+      stack.push({
+        entity: transformBlockEntity(definition.entities[index], item.entity, definition.base),
+        depth: item.depth + 1,
+        ancestry
+      })
+    }
+  }
+  if (stack.length) omittedEntities = stack.length;
+  return {entities: expanded, truncated: stack.length > 0, omittedEntities, circularReferences, maxEntities}
 }
 
 function parseDxf(text, name = "drawing.dxf", expandBlocks = true) {
@@ -166,13 +189,18 @@ function parseDxf(text, name = "drawing.dxf", expandBlocks = true) {
     else if (code === "2") current.block = value;
   }
   finish();
-  const blocks = expandBlocks ? parseBlockDefinitions(p) : new Map(), finalEntities = expandBlocks ? expandBlockEntities(entities, blocks) : entities,
+  const blocks = expandBlocks ? parseBlockDefinitions(p) : new Map(), expansion = expandBlocks ? expandBlockEntities(entities, blocks) : {entities, truncated: false, omittedEntities: 0, circularReferences: 0, maxEntities: 1000000},
+    finalEntities = expansion.entities,
     bounds = getBounds(finalEntities);
   return {
     name,
     entities: finalEntities,
     bounds,
-    blockCount: blocks.size
+    blockCount: blocks.size,
+    truncated: expansion.truncated,
+    omittedEntities: expansion.omittedEntities,
+    circularReferences: expansion.circularReferences,
+    entityLimit: expansion.maxEntities
   };
 }
 
@@ -213,12 +241,16 @@ function entityBounds(e) {
     xs = [pts[0].x - e.radius, pts[0].x + e.radius];
     ys = [pts[0].y - e.radius, pts[0].y + e.radius]
   }
-  return {
-    minX: Math.min(...xs),
-    maxX: Math.max(...xs),
-    minY: Math.min(...ys),
-    maxY: Math.max(...ys)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const x of xs) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x
   }
+  for (const y of ys) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y
+  }
+  return {minX, minY, maxX, maxY}
 }
 
 function getBounds(es) {
@@ -228,13 +260,15 @@ function getBounds(es) {
     maxX: 100,
     maxY: 100
   };
-  const bs = es.map(entityBounds);
-  return {
-    minX: Math.min(...bs.map(b => b.minX)),
-    minY: Math.min(...bs.map(b => b.minY)),
-    maxX: Math.max(...bs.map(b => b.maxX)),
-    maxY: Math.max(...bs.map(b => b.maxY))
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const entity of es) {
+    const bounds = entityBounds(entity);
+    if (bounds.minX < minX) minX = bounds.minX;
+    if (bounds.minY < minY) minY = bounds.minY;
+    if (bounds.maxX > maxX) maxX = bounds.maxX;
+    if (bounds.maxY > maxY) maxY = bounds.maxY
   }
+  return {minX, minY, maxX, maxY}
 }
 
 function distance(a, b) {
@@ -309,7 +343,9 @@ function uniqueAnchors(drawing) {
 
 function estimateSimilarity(oldD, newD) {
   const oldAnchors = uniqueAnchors(oldD), newAnchors = uniqueAnchors(newD),
-    pairs = [...oldAnchors].filter(([key]) => newAnchors.has(key)).map(([key, oldPoint]) => ({key, oldPoint, newPoint: newAnchors.get(key)}));
+    allPairs = [...oldAnchors].filter(([key]) => newAnchors.has(key)).map(([key, oldPoint]) => ({key, oldPoint, newPoint: newAnchors.get(key)})),
+    stride = Math.max(1, Math.ceil(allPairs.length / 160)),
+    pairs = allPairs.filter((_, index) => index % stride === 0).slice(0, 160);
   if (pairs.length < 2) return null;
   const span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1);
   let best = null;
@@ -339,14 +375,21 @@ function estimateAlignment(oldD, newD) {
   if (similarity) return similarity;
   const span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1),
     step = Math.max(span * .002, .01),
-    bins = new Map();
-  for (const o of oldD.entities) {
-    const key = shapeSignature(o),
-      oc = entityCenter(o);
-    for (const n of newD.entities) {
-      if (shapeSignature(n) !== key) continue;
-      const nc = entityCenter(n),
-        dx = oc.x - nc.x,
+    bins = new Map(), oldGroups = new Map(), newGroups = new Map(), sampleLimit = 32;
+  for (const [drawing, groups] of [[oldD, oldGroups], [newD, newGroups]]) {
+    for (const entity of drawing.entities) {
+      const key = shapeSignature(entity);
+      if (!groups.has(key)) groups.set(key, []);
+      const group = groups.get(key);
+      if (group.length < sampleLimit) group.push(entityCenter(entity))
+    }
+  }
+  for (const [key, oldCenters] of oldGroups) {
+    const newCenters = newGroups.get(key);
+    if (!newCenters) continue;
+    for (const oc of oldCenters) {
+      for (const nc of newCenters) {
+        const dx = oc.x - nc.x,
         dy = oc.y - nc.y,
         k = `${Math.round(dx/step)},${Math.round(dy/step)}`,
         v = bins.get(k) || {
@@ -358,6 +401,7 @@ function estimateAlignment(oldD, newD) {
       v.dy += dy;
       v.votes++;
       bins.set(k, v)
+      }
     }
   }
   const best = [...bins.values()].sort((a, b) => b.votes - a.votes)[0];
@@ -391,34 +435,48 @@ function translateDrawing(d, dx, dy) {
 }
 
 function compare(oldD, newD) {
-  const unused = new Set(newD.entities.map((_, i) => i)),
-    diffs = [];
+  const diffs = [], used = new Uint8Array(newD.entities.length), exactBuckets = new Map(), spatial = new Map(),
+    span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1), cellSize = Math.max(span / 200, .000001);
+  const spatialKey = (entity, center) => `${entity.type}:${Math.floor(center.x / cellSize)}:${Math.floor(center.y / cellSize)}`;
+  for (let index = 0; index < newD.entities.length; index++) {
+    const entity = newD.entities[index], exactKey = signature(entity), center = entityCenter(entity);
+    if (!exactBuckets.has(exactKey)) exactBuckets.set(exactKey, []);
+    exactBuckets.get(exactKey).push(index);
+    const key = spatialKey(entity, center);
+    if (!spatial.has(key)) spatial.set(key, []);
+    spatial.get(key).push(index)
+  }
   oldD.entities.forEach((o, oi) => {
     let exact = -1;
-    for (const ni of unused)
-      if (signature(o) === signature(newD.entities[ni])) {
-        exact = ni;
-        break
-      }
+    const bucket = exactBuckets.get(signature(o));
+    while (bucket?.length && exact < 0) {
+      const candidate = bucket.pop();
+      if (!used[candidate]) exact = candidate
+    }
     if (exact >= 0) {
-      unused.delete(exact);
+      used[exact] = 1;
       return
     }
-    const oc = entityCenter(o),
-      span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1);
-    let best = -1,
-      score = Infinity;
-    for (const ni of unused) {
-      const n = newD.entities[ni];
-      if (n.type !== o.type) continue;
-      const d = distance(oc, entityCenter(n)) / span + (n.layer === o.layer ? 0 : .04) + ((n.text || "") === (o.text || "") ? 0 : .06);
-      if (d < score) {
-        score = d;
-        best = ni
+    const oc = entityCenter(o), gridX = Math.floor(oc.x / cellSize), gridY = Math.floor(oc.y / cellSize);
+    let best = -1, score = Infinity;
+    for (let radius = 1; radius <= 4 && best < 0; radius++) {
+      for (let offsetX = -radius; offsetX <= radius; offsetX++) {
+        for (let offsetY = -radius; offsetY <= radius; offsetY++) {
+          if (radius > 1 && Math.abs(offsetX) < radius && Math.abs(offsetY) < radius) continue;
+          for (const ni of spatial.get(`${o.type}:${gridX + offsetX}:${gridY + offsetY}`) || []) {
+            if (used[ni]) continue;
+            const n = newD.entities[ni];
+            const candidateScore = distance(oc, entityCenter(n)) / span + (n.layer === o.layer ? 0 : .04) + ((n.text || "") === (o.text || "") ? 0 : .06);
+            if (candidateScore < score) {
+              score = candidateScore;
+              best = ni
+            }
+          }
+        }
       }
     }
     if (best >= 0 && score < .12) {
-      unused.delete(best);
+      used[best] = 1;
       diffs.push({
         kind: "changed",
         oldIndex: oi,
@@ -437,7 +495,8 @@ function compare(oldD, newD) {
       detail: `${o.layer} 레이어의 ${labelType(o.type)} 삭제`
     });
   });
-  for (const ni of unused) {
+  for (let ni = 0; ni < newD.entities.length; ni++) {
+    if (used[ni]) continue;
     const n = newD.entities[ni];
     diffs.push({
       kind: "added",
@@ -628,11 +687,13 @@ function renderResults() {
     const k = b.dataset.filter;
     b.querySelector("span").textContent = k === "all" ? state.diffs.length : count(k)
   }
-  const rows = state.diffs.filter(d => state.filter === "all" || d.kind === state.filter);
-  $("#resultList").innerHTML = rows.length ? rows.map(d => {
+  const matchingRows = state.diffs.map((diff, index) => ({diff, index})).filter(({diff}) => state.filter === "all" || diff.kind === state.filter);
+  const rows = matchingRows.slice(0, RESULT_RENDER_LIMIT);
+  const limitedNotice = matchingRows.length > RESULT_RENDER_LIMIT ? `<div class="empty-row">화면 성능을 위해 ${matchingRows.length.toLocaleString("ko-KR")}건 중 ${RESULT_RENDER_LIMIT.toLocaleString("ko-KR")}건만 표시합니다. CSV에는 전체 결과가 포함됩니다.</div>` : "";
+  $("#resultList").innerHTML = rows.length ? rows.map(({diff: d, index}) => {
     const location = state.mode === "pdf" ? `${d.page}페이지` : `X ${d.center.x.toFixed(2)} · Y ${d.center.y.toFixed(2)}`;
-    return `<div class="result-row" data-id="${state.diffs.indexOf(d)}"><span class="badge ${d.kind}">${({added:"추가",removed:"삭제",changed:"변경"})[d.kind]}</span><span class="entity-type">${labelType(d.type)}</span><span>${escapeHtml(d.detail)}</span><span class="location">${location}</span></div>`
-  }).join("") : `<div class="empty-row">해당 항목이 없습니다.</div>`;
+    return `<div class="result-row" data-id="${index}"><span class="badge ${d.kind}">${({added:"추가",removed:"삭제",changed:"변경"})[d.kind]}</span><span class="entity-type">${labelType(d.type)}</span><span>${escapeHtml(d.detail)}</span><span class="location">${location}</span></div>`
+  }).join("") + limitedNotice : `<div class="empty-row">해당 항목이 없습니다.</div>`;
   for (const row of $$(".result-row")) row.onclick = () => focusDiff(state.diffs[+row.dataset.id])
 }
 
@@ -656,7 +717,9 @@ function focusDiff(d) {
     return
   }
   const size = Math.max(state.view.w, state.view.h) * .2;
-  focusCadViews(d.center);
+  const oldCenter = d.oldIndex != null ? entityCenter(state.old.entities[d.oldIndex]) : d.center;
+  const newCenter = d.newIndex != null ? entityCenter(state.rawNew.entities[d.newIndex]) : inverseAlignmentPoint(d.center, state.alignment);
+  focusCadViews({old: oldCenter, new: newCenter});
   state.view = {
     x: d.center.x - size / 2,
     y: -d.center.y - size / 2,
@@ -668,6 +731,14 @@ function focusDiff(d) {
   if (d.oldIndex != null) $(`#oldViewer [data-index="${d.oldIndex}"]`)?.classList.add("focused");
   if (d.newIndex != null) $(`#newViewer [data-index="${d.newIndex}"]`)?.classList.add("focused")
 }
+
+function inverseAlignmentPoint(point, alignment) {
+  if (!alignment?.applied || !$("#alignToggle").checked) return point;
+  if (alignment.mode !== "similarity") return {x: point.x - alignment.dx, y: point.y - alignment.dy};
+  const scale = alignment.scale || 1, cos = Math.cos(alignment.angle), sin = Math.sin(alignment.angle),
+    x = (point.x - alignment.dx) / scale, y = (point.y - alignment.dy) / scale;
+  return {x: cos * x + sin * y, y: -sin * x + cos * y}
+}
 async function loadFile(input, side) {
   const f = input.files[0];
   if (!f) return;
@@ -676,11 +747,14 @@ async function loadFile(input, side) {
   const isPdf = f.name.toLowerCase().endsWith(".pdf");
   const isDwg = f.name.toLowerCase().endsWith(".dwg");
   const other = state.files[side === "old" ? "new" : "old"];
-  if (other && other.name.toLowerCase().endsWith(".pdf") !== isPdf) {
+  const format = isPdf ? "pdf" : isDwg ? "dwg" : "dxf";
+  const otherFormat = other ? other.name.toLowerCase().endsWith(".pdf") ? "pdf" : other.name.toLowerCase().endsWith(".dwg") ? "dwg" : "dxf" : null;
+  if (otherFormat && otherFormat !== format) {
     $("#status").textContent = "비교할 두 파일은 같은 형식이어야 합니다.";
     return
   }
-  state.mode = isPdf ? "pdf" : isDwg ? "dwg" : "dxf";
+  state.mode = format;
+  setCadViewAlignment(null);
   $(`#${side}Name`).textContent = `${f.name} · ${(f.size / 1024 / 1024).toFixed(2)}MB`;
   if (isPdf) {
     state.files[side] = f;
@@ -702,20 +776,21 @@ async function loadFile(input, side) {
   $("#overlayBtn").disabled = false;
   $("#alignToggle").disabled = false;
   try {
-    const text = await f.text();
+    const decoded = await decodeDxfFile(f), text = decoded.text;
     if (text.startsWith("AutoCAD Binary DXF")) throw new Error("바이너리 DXF는 아직 지원하지 않습니다. ASCII DXF로 저장하세요.");
     if (!/\bSECTION\b[\s\S]*\bENTITIES\b/.test(text)) throw new Error("DXF의 ENTITIES 섹션을 찾지 못했습니다.");
-    const drawing = parseDxf(text, f.name, false);
+    const drawing = parseDxf(text, f.name, true);
     if (!drawing.entities.length) throw new Error("표시할 수 있는 DXF 객체를 찾지 못했습니다. 지원 객체 또는 파일 형식을 확인하세요.");
     state.files[side] = f;
     if (side === "new") {
       state.rawNew = drawing;
       state.new = cloneDrawing(drawing)
     } else state.old = drawing;
-    $(`#${side}Name`).textContent = `${f.name} · ${drawing.entities.length}개 객체 · 블록 ${drawing.blockCount || 0}개`;
+    const blockWarning = drawing.truncated ? ` · 분석 한도 ${drawing.entityLimit.toLocaleString("ko-KR")}개` : drawing.circularReferences ? ` · 순환 블록 ${drawing.circularReferences}건 제외` : "";
+    $(`#${side}Name`).textContent = `${f.name} · ${drawing.entities.length.toLocaleString("ko-KR")}개 객체 · 블록 ${drawing.blockCount || 0}개 · ${decoded.codepage}${blockWarning}`;
     renderDrawing(side);
     fit();
-    $("#status").textContent = `${side === "old" ? "원본" : "변경본"} 도면을 정상적으로 인식했습니다.`
+    $("#status").textContent = drawing.truncated ? `${side === "old" ? "원본" : "변경본"}은 분석 객체 한도에 도달했습니다. 화면 렌더링은 전체 도면을 유지합니다.` : `${side === "old" ? "원본" : "변경본"} 도면을 정상적으로 인식했습니다.`
   } catch (error) {
     state.files[side] = null;
     if (side === "new") {
@@ -737,19 +812,29 @@ async function runCompare() {
     $("#status").textContent = "변경 목록을 계산하려면 원본과 변경본 DXF를 모두 선택하세요.";
     return
   }
-  state.new = cloneDrawing(state.rawNew);
-  state.alignment = estimateAlignment(state.old, state.new);
-  if ($("#alignToggle").checked && state.alignment.applied) transformDrawing(state.new, state.alignment);
-  state.diffs = compare(state.old, state.new);
-  renderDrawing("old");
-  renderDrawing("new");
-  if (!$("#overlayPanel").hidden) renderOverlay();
-  fit();
-  renderResults();
-  $("#exportBtn").disabled = false;
-  const a = state.alignment,
-    alignText = $("#alignToggle").checked && a.applied ? (a.mode === "similarity" ? ` · 자동 정렬 회전 ${(a.angle*180/Math.PI).toFixed(2)}°, 축척 ${a.scale.toFixed(4)} (${a.votes}개 앵커)` : ` · 자동 정렬 ΔX ${a.dx.toFixed(2)}, ΔY ${a.dy.toFixed(2)} (${a.votes}개 기준 객체)`) : " · 자동 정렬 없음";
-  $("#status").textContent = `비교 완료: ${state.old.entities.length}개 ↔ ${state.new.entities.length}개 객체${alignText}`
+  $("#compareBtn").disabled = true;
+  $("#status").textContent = "대용량 안전 모드로 정렬 및 변경 항목을 계산하고 있습니다…";
+  await new Promise(resolve => requestAnimationFrame(() => resolve()));
+  try {
+    state.new = cloneDrawing(state.rawNew);
+    state.alignment = estimateAlignment(state.old, state.new);
+    if ($("#alignToggle").checked && state.alignment.applied) transformDrawing(state.new, state.alignment);
+    setCadViewAlignment($("#alignToggle").checked ? state.alignment : null);
+    state.diffs = compare(state.old, state.new);
+    renderDrawing("old");
+    renderDrawing("new");
+    if (!$("#overlayPanel").hidden) renderOverlay();
+    fit();
+    renderResults();
+    $("#exportBtn").disabled = false;
+    const a = state.alignment,
+      alignText = $("#alignToggle").checked && a.applied ? (a.mode === "similarity" ? ` · 자동 정렬 회전 ${(a.angle*180/Math.PI).toFixed(2)}°, 축척 ${a.scale.toFixed(4)} (${a.votes}개 앵커)` : ` · 자동 정렬 ΔX ${a.dx.toFixed(2)}, ΔY ${a.dy.toFixed(2)} (${a.votes}개 기준 객체)`) : " · 자동 정렬 없음";
+    $("#status").textContent = `비교 완료: ${state.old.entities.length.toLocaleString("ko-KR")}개 ↔ ${state.new.entities.length.toLocaleString("ko-KR")}개 객체${alignText}`
+  } catch (error) {
+    $("#status").textContent = `도면 비교 실패: ${error.message}`
+  } finally {
+    $("#compareBtn").disabled = false
+  }
 }
 
 function transformDrawing(drawing, alignment) {
