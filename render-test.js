@@ -1,6 +1,6 @@
 const DB_NAME = "drawing-automation-equipment";
 const STORE_NAME = "drawings";
-const ANALYSIS_VERSION = 3;
+const ANALYSIS_VERSION = 4;
 
 const fileInput = document.querySelector("#renderFile");
 const frame = document.querySelector("#renderFrame");
@@ -100,6 +100,18 @@ function equipmentPriority(name) {
   return {priority: Number.MAX_SAFE_INTEGER, category: ""}
 }
 
+function equipmentLabel(sourceName, classification) {
+  const upperName = sourceName.toLocaleUpperCase("ko-KR");
+  const definition = equipmentPriorities[classification.priority];
+  const latinAliases = (definition?.aliases || []).filter(alias => /^[A-Z0-9 /-]+$/i.test(alias));
+  const tags = upperName.match(/[A-Z0-9]+(?:[-_][A-Z0-9]+)+/g) || [];
+  const tagged = tags.find(tag => latinAliases.some(alias => {
+    const token = alias.toUpperCase().replace(/[\s/]/g, "");
+    return token.length >= 2 && tag.replace(/[_-]/g, "").includes(token)
+  }));
+  return tagged || classification.category
+}
+
 function equipmentCandidates(textItems) {
   const seen = new Set(), equipment = [];
   for (const item of textItems || []) {
@@ -110,8 +122,9 @@ function equipmentCandidates(textItems) {
     if (seen.has(key)) continue;
     const classification = equipmentPriority(name);
     if (classification.priority === Number.MAX_SAFE_INTEGER) continue;
+    const label = equipmentLabel(name, classification);
     seen.add(key);
-    equipment.push({name, x: item.x, y: item.y, width: item.w, height: item.h, ...classification})
+    equipment.push({name: label, sourceName: name, x: item.x, y: item.y, width: item.w, height: item.h, ...classification})
   }
   return equipment.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
 }
@@ -142,7 +155,7 @@ function renderDrawingList() {
     <button class="drawing-card ${drawing.id === activeDrawing?.id ? "active" : ""}" data-id="${drawing.id}">
       <strong>${escapeHtml(drawing.displayName)}</strong>
       <span>${escapeHtml(drawing.originalName)}</span>
-      <small>${escapeHtml(drawing.description || "설명 없음")} · 문서 기준 장비 ${drawing.equipment.length.toLocaleString("ko-KR")}개</small>
+      <small>${escapeHtml(drawing.description || "설명 없음")} · 문서 기준 장비 ${(drawing.equipment || []).filter(item => item.priority < Number.MAX_SAFE_INTEGER).length.toLocaleString("ko-KR")}개</small>
     </button>
   `).join("") : '<div class="empty-row">등록된 도면이 없습니다.</div>';
   for (const card of document.querySelectorAll(".drawing-card")) {
@@ -156,8 +169,9 @@ function renderEquipmentList() {
     return
   }
   const query = searchInput.value.trim().toLocaleUpperCase("ko-KR");
-  const rows = activeDrawing.equipment.filter(item => !query || item.name.toLocaleUpperCase("ko-KR").includes(query));
-  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 문서 기준 장비 ${activeDrawing.equipment.length.toLocaleString("ko-KR")}개${query ? ` · 검색 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
+  const documentedEquipment = activeDrawing.equipment.filter(item => item.priority < Number.MAX_SAFE_INTEGER);
+  const rows = documentedEquipment.filter(item => !query || item.name.toLocaleUpperCase("ko-KR").includes(query));
+  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 문서 기준 장비 ${documentedEquipment.length.toLocaleString("ko-KR")}개${query ? ` · 검색 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
   document.querySelector("#equipmentList").innerHTML = rows.length ? rows.slice(0, 5000).map((item, index) => `
     <button class="equipment-row" data-index="${activeDrawing.equipment.indexOf(item)}">
       <span class="equipment-number">${index + 1}</span>
@@ -320,7 +334,10 @@ async function initialize() {
     await loadEquipmentPriorities();
     drawings = (await getDrawings()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const drawing of drawings) {
-      drawing.equipment = (drawing.equipment || []).map(item => ({...item, ...equipmentPriority(item.name)}))
+      drawing.equipment = (drawing.equipment || []).map(item => {
+        const sourceName = cleanCadText(item.sourceName || item.name || ""), classification = equipmentPriority(sourceName);
+        return {...item, sourceName, name: classification.priority < Number.MAX_SAFE_INTEGER ? equipmentLabel(sourceName, classification) : "", ...classification}
+      }).filter(item => item.priority < Number.MAX_SAFE_INTEGER)
         .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
     }
     renderDrawingList();
