@@ -27,6 +27,11 @@ MAX_UPLOAD = int(os.environ.get("DRAWING_AUTOMATION_MAX_UPLOAD", "0"))
 
 
 def parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
+    """브라우저가 전송한 multipart/form-data를 파일명과 원본 바이트 중심으로 정리한다.
+
+    대용량 CAD 파일을 텍스트로 변환하지 않고 bytes 상태로 유지해야 인코딩 손상과
+    불필요한 메모리 복사를 줄일 수 있다.
+    """
     message = BytesParser(policy=default).parsebytes(
         f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
     )
@@ -44,6 +49,11 @@ def png_data(pixmap: fitz.Pixmap) -> str:
 
 
 def changed_tiles(a: fitz.Pixmap, b: fitz.Pixmap, tile: int = 24) -> list[dict]:
+    """PDF 두 페이지를 작은 타일로 비교해 변경 영역 후보를 반환한다.
+
+    픽셀 하나마다 결과를 만들면 노이즈와 결과 수가 폭증하므로 타일 단위 차이 비율을
+    계산한 뒤 인접한 변경 타일은 클라이언트가 표시할 수 있는 사각형으로 사용한다.
+    """
     width, height = min(a.width, b.width), min(a.height, b.height)
     samples_a, samples_b = a.samples, b.samples
     stride_a, stride_b = a.stride, b.stride
@@ -111,6 +121,11 @@ def extract_document(data: bytes, filename: str) -> list[tuple[int, str]]:
 
 
 def extract_dxf_text(data: bytes) -> str:
+    """서버 문서 대조용으로 DXF의 TEXT/MTEXT 값(group code 1, 3)을 빠르게 추출한다.
+
+    이 경로는 전체 CAD 파서가 아니라 요구사항 키워드 대조용 경량 추출기다. 브라우저의
+    장비 분석과 렌더링에서는 별도의 코드페이지 감지기(dxf-encoding.js)를 사용한다.
+    """
     lines = data.decode("utf-8", errors="replace").replace("\r", "").split("\n")
     values = []
     for index in range(0, len(lines) - 1, 2):
@@ -199,6 +214,11 @@ def extract_drawing_text(data: bytes, filename: str) -> str:
 
 
 def dxf_preview(data: bytes, expand_blocks: bool = True) -> dict:
+    """문서 검토 응답에 포함할 경량 DXF 미리보기 엔티티를 생성한다.
+
+    전체 렌더링 데이터 대신 검토 위치 표시에 필요한 도형과 텍스트만 반환하며,
+    블록 전개에는 별도의 개수 제한을 적용해 취합 도면의 메모리 폭증을 방지한다.
+    """
     lines = data.decode("utf-8", errors="replace").replace("\r", "").split("\n")
     pairs = [(lines[index].strip(), lines[index + 1].strip()) for index in range(0, len(lines) - 1, 2)]
     entities, current, in_entities = [], None, False
@@ -347,6 +367,7 @@ def transform_dxf_block_entity(source: dict, insert: dict, base: dict) -> dict:
 
 
 def expand_dxf_blocks(entities: list[dict], blocks: dict, max_entities: int = 1_000_000) -> list[dict]:
+    """INSERT를 반복형 스택으로 전개하고 순환 블록 및 최대 객체 수를 제한한다."""
     expanded: list[dict] = []
     stack = [(entity, frozenset()) for entity in reversed(entities)]
     while stack and len(expanded) < max_entities:
@@ -384,6 +405,7 @@ def drawing_preview(data: bytes, filename: str) -> dict:
 
 
 def find_oda_converter() -> str | None:
+    """환경 변수와 Windows의 일반 설치 위치에서 ODAFileConverter 실행 파일을 찾는다."""
     configured = os.environ.get("ODA_FILE_CONVERTER")
     if configured and Path(configured).is_dir():
         configured = str(Path(configured) / "ODAFileConverter.exe")
@@ -404,6 +426,11 @@ def find_oda_converter() -> str | None:
 
 
 def convert_dwgs(items: list[tuple[str, bytes]]) -> tuple[str, str, bytes]:
+    """업로드된 DWG를 임시 폴더에서 변환하고 단일 DXF 또는 ZIP 응답을 만든다.
+
+    사용자 파일은 작업별 임시 디렉터리에서만 다루며 요청 종료 시 제거된다. 여러 파일은
+    이름 충돌을 정리한 뒤 ZIP으로 묶고, 한 파일은 불필요한 압축 없이 바로 반환한다.
+    """
     converter = find_oda_converter()
     if not converter:
         raise RuntimeError("ODA File Converter가 설치되지 않았습니다. 설치 후 ODA_FILE_CONVERTER 환경 변수에 실행 파일 경로를 지정하세요.")
@@ -451,6 +478,7 @@ def normalized(value: str) -> str:
 
 
 def review_documents(fields: dict[str, bytes]) -> dict:
+    """시방/승인 문서의 요구사항과 도면 텍스트를 대조해 근거 및 위치 후보를 생성한다."""
     names = json.loads(fields.get("names", b"[]").decode("utf-8"))
     drawing_text = fields.get("drawingText", b"").decode("utf-8", errors="replace")
     preview = None
@@ -599,8 +627,24 @@ def compare_pdfs(old_bytes: bytes, new_bytes: bytes) -> dict:
 
 
 class Handler(SimpleHTTPRequestHandler):
+    """정적 빌드 결과와 변환·검토 API를 함께 제공하는 로컬 전용 HTTP 처리기."""
+    PAGE_ALIASES = {
+        "/review.html": "/pages/review.html",
+        "/convert.html": "/pages/convert.html",
+        "/render-test.html": "/pages/render-test.html",
+        "/cad-frame.html": "/pages/cad-frame.html",
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_ROOT), **kwargs)
+
+    def do_GET(self) -> None:
+        """기존 공개 URL을 유지하면서 실제 HTML은 pages 디렉터리에서 제공한다."""
+        request_path, separator, query = self.path.partition("?")
+        mapped_path = self.PAGE_ALIASES.get(request_path)
+        if mapped_path:
+            self.path = mapped_path + (separator + query if separator else "")
+        super().do_GET()
 
     def end_headers(self) -> None:
         request_path = self.path.split("?", 1)[0].lower()

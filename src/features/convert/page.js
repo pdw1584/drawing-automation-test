@@ -9,6 +9,8 @@ const $ = selector => document.querySelector(selector);
 
 // ODA 설치경로 확인 요청 
 async function checkConverter() {
+  // 페이지 진입 시 서버가 실제 ODA 실행 파일을 찾았는지 확인한다. UI의 활성 상태와
+  // 서버 변환 가능 상태가 어긋나지 않도록 확인이 끝나기 전에는 변환 버튼을 잠근다.
   try {
     const form = new FormData();
     form.append("check", "1");
@@ -33,6 +35,8 @@ function updateButton() {
 }
 // 변환 완료 zip 파일 이름 변경 칸
 function safeDownloadName() {
+  // Windows 예약문자와 경로 구분자를 제거해 Content-Disposition 및 로컬 저장에서
+  // 사용자 지정 ZIP 이름이 잘못된 경로나 빈 파일명이 되지 않게 한다.
   if (state.files.length === 1) return state.files[0].name.replace(/\.dwg$/i, ".dxf");
   const fallback = "converted-dxf";
   const base = ($("#outputName").value.trim() || fallback)
@@ -42,6 +46,8 @@ function safeDownloadName() {
 }
 // dwg to dxf 변환 
 async function convert() {
+  // 단일 파일은 DXF 그대로, 여러 파일은 사용자 지정 이름의 ZIP으로 내려받는다.
+  // 응답 Blob URL은 클릭 직후 해제해 반복 변환 시 브라우저 메모리가 누적되지 않게 한다.
   $("#convertBtn").disabled = true;
   $("#convertStatus").textContent = "DWG 파일을 변환하고 있습니다…";
   try {

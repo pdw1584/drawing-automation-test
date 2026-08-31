@@ -21,16 +21,32 @@ function detectUtf8(bytes) {
   }
 }
 
+// 후보 디코딩 결과를 사람이 읽을 수 있는 정도로 평가한다. 대체문자와 UTF-8
+// 모지바케 흔적은 크게 감점해 헤더 코드페이지가 잘못된 국내 DXF도 보정한다.
+function decodedTextQuality(value) {
+  const hangul = (value.match(/[가-힣]/g) || []).length;
+  const replacement = (value.match(/\uFFFD/g) || []).length;
+  const mojibake = (value.match(/[ÃÂ]|(?:ê|ë|ì|í)[\u0080-\u00ff]/g) || []).length;
+  const control = (value.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g) || []).length;
+  return hangul * 3 - replacement * 30 - mojibake * 8 - control * 5
+}
+
 export function detectDxfEncoding(buffer) {
   const bytes = new Uint8Array(buffer);
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return {encoding: "utf-8", codepage: "UTF-8"};
+  const validUtf8 = detectUtf8(bytes);
   const header = new TextDecoder("windows-1252").decode(bytes.subarray(0, Math.min(bytes.length, 262144)));
   const match = header.match(/\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*([^\r\n]+)/i);
   const codepage = match?.[1].trim().toUpperCase() || "";
   if (CODEPAGE_LABELS.has(codepage)) return {encoding: CODEPAGE_LABELS.get(codepage), codepage};
+  // 일부 프로그램은 실제 UTF-8 DXF에도 ANSI_1252를 기록한다. UTF-8 바이트 검증을
+  // 통과한 파일을 CP949 후보로 다시 해석하면 `지하층`이 `移쒖...`처럼 변형된다.
+  if (validUtf8 && (!codepage || codepage === "ANSI_1252")) {
+    return {encoding: "utf-8", codepage: codepage ? `${codepage} → UTF-8 보정` : "UTF-8"}
+  }
   const ansiMatch = codepage.match(/^ANSI_(\d+)$/);
   if (ansiMatch) return {encoding: `windows-${ansiMatch[1]}`, codepage};
-  return detectUtf8(bytes) ? {encoding: "utf-8", codepage: codepage || "UTF-8"} : {encoding: "euc-kr", codepage: codepage || "CP949 추정"}
+  return validUtf8 ? {encoding: "utf-8", codepage: codepage || "UTF-8"} : {encoding: "euc-kr", codepage: codepage || "CP949 추정"}
 }
 
 export function decodeDxfBuffer(buffer) {
@@ -44,11 +60,11 @@ export function decodeDxfBuffer(buffer) {
     decoder = new TextDecoder("utf-8")
   }
   let decodedText = decoder.decode(buffer);
-  if (detected.encoding !== "euc-kr" && bytes.some(byte => byte >= 0x80)) {
+  const validUtf8 = detectUtf8(bytes);
+  if (detected.encoding !== "euc-kr" && detected.encoding !== "utf-8" && !validUtf8 && bytes.some(byte => byte >= 0x80)) {
     const koreanCandidate = new TextDecoder("euc-kr").decode(buffer);
-    const hangulCount = value => (value.match(/[가-힣]/g) || []).length;
-    const currentHangul = hangulCount(decodedText), candidateHangul = hangulCount(koreanCandidate);
-    if (candidateHangul >= 2 && candidateHangul > currentHangul * 2 + 1) {
+    const candidateHangul = (koreanCandidate.match(/[가-힣]/g) || []).length;
+    if (candidateHangul >= 2 && decodedTextQuality(koreanCandidate) > decodedTextQuality(decodedText) + 3) {
       decodedText = koreanCandidate;
       detected.encoding = "euc-kr";
       detected.codepage = `${detected.codepage} → CP949 보정`

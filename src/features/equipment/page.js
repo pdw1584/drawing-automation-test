@@ -1,6 +1,17 @@
-const DB_NAME = "drawing-automation-equipment";
-const STORE_NAME = "drawings";
+import {
+  analyzeDxf,
+  cleanCadText,
+  configureEquipmentPriorities,
+  equipmentLabel,
+  equipmentPriority
+} from "./analysis.js";
+import {getDrawings, removeDrawing, saveDrawing} from "./store.js";
+import {escapeHtml, formatBytes} from "../../shared/ui-utils.js";
+
 const ANALYSIS_VERSION = 8;
+
+// 분석 규칙 버전이다. 장비/판넬 매칭 규칙이 바뀌면 값을 올려 기존 도면을
+// 최초 선택 시 한 번만 재분석한다. IndexedDB 자체의 스키마 버전과는 별개다.
 
 const fileInput = document.querySelector("#renderFile");
 const frame = document.querySelector("#renderFrame");
@@ -25,174 +36,13 @@ let selectedEquipmentCategory = "";
 async function loadEquipmentPriorities() {
   const response = await fetch("/equipment-priority.json", {cache: "no-store"});
   if (!response.ok) throw new Error("장비 우선순위 사전을 불러오지 못했습니다.");
-  equipmentPriorities = await response.json()
+  equipmentPriorities = await response.json();
+  configureEquipmentPriorities(equipmentPriorities)
 }
-
-function openDatabase() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        database.createObjectStore(STORE_NAME, {keyPath: "id"})
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function useStore(mode, operation) {
-  const database = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, mode);
-    const request = operation(transaction.objectStore(STORE_NAME));
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-    transaction.oncomplete = () => database.close();
-    transaction.onabort = () => reject(transaction.error)
-  })
-}
-
-const getDrawings = () => useStore("readonly", store => store.getAll());
-const saveDrawing = drawing => useStore("readwrite", store => store.put(drawing));
-const removeDrawing = id => useStore("readwrite", store => store.delete(id));
 
 function setStatus(message, kind = "waiting") {
   statusElement.textContent = message;
   statusElement.className = `render-status ${kind}`
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, character => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[character])
-}
-
-function cleanCadText(value) {
-  return value
-    .replace(/\\P/gi, " ")
-    .replace(/\\[A-Za-z][^;]*;/g, "")
-    .replace(/[{}]/g, "")
-    .replace(/%%[A-Za-z]/g, "")
-    .replace(/\uFFFD/g, "")
-    .replace(/\?{2,}/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-function equipmentPriority(name) {
-  const upperName = name.toLocaleUpperCase("ko-KR");
-  for (let index = 0; index < equipmentPriorities.length; index++) {
-    const definition = equipmentPriorities[index];
-    for (const rawAlias of definition.aliases) {
-      const alias = rawAlias.toLocaleUpperCase("ko-KR").trim();
-      const matched = alias.length <= 3
-        ? new RegExp(`(^|[^A-Z0-9가-힣])${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Z0-9가-힣]|$)`).test(upperName)
-        : upperName.replace(/[\s_-]/g, "").includes(alias.replace(/[\s_-]/g, ""));
-      if (matched) return {priority: index, category: definition.name}
-    }
-  }
-  return {priority: Number.MAX_SAFE_INTEGER, category: ""}
-}
-
-function equipmentLabel(sourceName, classification) {
-  const upperName = sourceName.toLocaleUpperCase("ko-KR");
-  const definition = equipmentPriorities[classification.priority];
-  const latinAliases = (definition?.aliases || []).filter(alias => /^[A-Z0-9 /-]+$/i.test(alias));
-  const tags = upperName.match(/[A-Z0-9]+(?:[-_][A-Z0-9]+)+/g) || [];
-  const tagged = tags.find(tag => latinAliases.some(alias => {
-    const token = alias.toUpperCase().replace(/[\s/]/g, "");
-    return token.length >= 2 && tag.replace(/[_-]/g, "").includes(token)
-  }));
-  return tagged || classification.category
-}
-
-const PANEL_LINK_CATEGORIES = new Set(["UPS", "STS", "Battery", "변압기", "HV", "LV", "RF"]);
-
-function panelNameFromText(value) {
-  const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
-  const matches = text.match(/(?:B?\d{1,2}F|RF|PH)(?:\s*[-_/]\s*[A-Z0-9]{1,8}){1,4}/g) || [];
-  const match = matches.find(name => !/(?:UPS|STS|BAT|TR)/.test(name));
-  return match ? match.replace(/\s*[-_/]\s*/g, "-") : ""
-}
-
-function rfPanelNameFromText(value) {
-  const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
-  const match = text.match(/(?:^|[^A-Z0-9])(\d{1,3}[A-Z](?:\s*[-_/]\s*\d{1,3})?)(?:[^A-Z0-9]|$)/);
-  return match ? match[1].replace(/\s*[-_/]\s*/g, "-") : ""
-}
-
-function distanceBetween(first, second) {
-  return Math.hypot(first.x - second.x, first.y - second.y)
-}
-
-function attachNearbyPanelNames(equipment, textItems) {
-  const panels = (textItems || []).map(item => ({...item, panelName: panelNameFromText(item.text || "")}))
-    .filter(item => item.panelName);
-  const rfPanels = (textItems || []).map(item => ({
-    ...item,
-    panelName: panelNameFromText(item.text || "") ? "" : rfPanelNameFromText(item.text || "")
-  }))
-    .filter(item => item.panelName);
-  if (!panels.length && !rfPanels.length) return equipment;
-
-  const linkable = equipment.filter(item => PANEL_LINK_CATEGORIES.has(item.category));
-  for (const item of linkable) {
-    const panelCandidates = item.category === "RF" ? rfPanels : panels;
-    const nearestPanel = panelCandidates.map(panel => ({panel, distance: distanceBetween(item, panel)}))
-      .sort((a, b) => a.distance - b.distance)[0];
-    if (!nearestPanel) continue;
-
-    const nearestPeerDistance = linkable.filter(peer => peer !== item && distanceBetween(item, peer) > .001)
-      .reduce((nearest, peer) => Math.min(nearest, distanceBetween(item, peer)), Number.POSITIVE_INFINITY);
-    const textScaleLimit = Math.max(item.height || 0, nearestPanel.panel.h || 0, 1) * 100;
-    const peerLimit = Number.isFinite(nearestPeerDistance) ? nearestPeerDistance * 2 : 0;
-    if (nearestPanel.distance > Math.max(textScaleLimit, peerLimit)) continue;
-
-    item.panelName = nearestPanel.panel.panelName;
-    item.name = `${item.name} · ${item.panelName}`
-  }
-  return equipment
-}
-
-function equipmentCandidates(textItems) {
-  const seen = new Set(), equipment = [];
-  for (const item of textItems || []) {
-    const name = cleanCadText(item.text || "");
-    if (name.length < 2 || name.length > 100) continue;
-    if (!/[A-Za-z가-힣]/.test(name) || /^[-+Ø⌀]?\d+(?:[.,x×*/-]\d+)*\s*(?:mm|cm|m|a|v|kw|t)?$/i.test(name)) continue;
-    const key = `${name.toUpperCase()}:${item.x.toFixed(2)}:${item.y.toFixed(2)}`;
-    if (seen.has(key)) continue;
-    const classification = equipmentPriority(name);
-    if (classification.priority === Number.MAX_SAFE_INTEGER) continue;
-    const label = equipmentLabel(name, classification);
-    seen.add(key);
-    equipment.push({name: label, sourceName: name, x: item.x, y: item.y, width: item.w, height: item.h, ...classification})
-  }
-  return attachNearbyPanelNames(equipment, textItems)
-    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
-}
-
-function analyzeDxf(file) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./review-dxf-worker.js", import.meta.url), {type: "module"});
-    worker.onmessage = event => {
-      worker.terminate();
-      if (event.data?.error) reject(new Error(event.data.error));
-      else resolve({codepage: event.data.codepage, equipment: equipmentCandidates(event.data.preview?.textItems)})
-    };
-    worker.onerror = event => {
-      worker.terminate();
-      reject(new Error(event.message || "DXF 장비명 분석 Worker 실행에 실패했습니다."))
-    };
-    worker.postMessage({file})
-  })
 }
 
 function updateRegisterButton() {
@@ -221,6 +71,7 @@ function renderEquipmentList() {
   }
   const query = searchInput.value.trim().toLocaleUpperCase("ko-KR");
   const documentedEquipment = activeDrawing.equipment.filter(item => item.priority < Number.MAX_SAFE_INTEGER);
+  // 고정 필터가 아니라 현재 도면에서 실제 검출된 분류만 버블 버튼으로 만든다.
   const categoryCounts = new Map();
   for (const item of documentedEquipment) categoryCounts.set(item.category, (categoryCounts.get(item.category) || 0) + 1);
   if (selectedEquipmentCategory && !categoryCounts.has(selectedEquipmentCategory)) selectedEquipmentCategory = "";
@@ -270,6 +121,7 @@ function focusEquipment(equipment, row) {
 
 async function renderActiveDrawing() {
   if (!activeDrawing || !rendererReady) return;
+  // 도면을 연속 선택할 때 이전 파일 읽기가 늦게 끝나 새 도면을 덮지 않도록 한다.
   const generation = ++renderGeneration;
   setStatus("도면을 불러오는 중…", "loading");
   fitButton.disabled = true;
@@ -309,6 +161,8 @@ async function reanalyzeActiveDrawing(automatic = false) {
     activeDrawing.equipment = analysis.equipment;
     activeDrawing.codepage = analysis.codepage;
     activeDrawing.analysisVersion = ANALYSIS_VERSION;
+    // equipment와 analysisVersion을 한 transaction에 저장하고 commit 완료 후 갱신한다.
+    // 그래야 새로고침 직후에도 판넬명이 포함된 최신 분석 결과가 유지된다.
     await saveDrawing(activeDrawing);
     renderDrawingList();
     renderEquipmentList()
@@ -409,6 +263,8 @@ async function initialize() {
     await loadEquipmentPriorities();
     drawings = (await getDrawings()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const drawing of drawings) {
+      // 현재 버전 결과는 저장된 판넬명을 그대로 복원한다. 여기서 다시 표준 장비명으로
+      // 계산하면 `UPS · 5F-1D-3`의 판넬 부분이 새로고침 때 사라지게 된다.
       if (drawing.analysisVersion === ANALYSIS_VERSION) {
         drawing.equipment = (drawing.equipment || [])
           .filter(item => item.priority < Number.MAX_SAFE_INTEGER)

@@ -1,4 +1,5 @@
-import { focusCadViews, renderCadFile } from "./cad-renderer.js";
+import { focusCadViews, renderCadFile } from "../../shared/cad-renderer.js";
+import {escapeHtml} from "../../shared/ui-utils.js";
 
 "use strict";
 
@@ -16,19 +17,11 @@ const state = {
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, character => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  })[character])
-}
-
 function extractDxfReviewData(file) {
+  // 문서 검토에서는 전체 CAD 형상보다 텍스트와 위치가 중요하다. Worker로 파싱해
+  // 큰 DXF에서도 메인 스레드의 입력/스크롤이 멈추지 않도록 한다.
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./review-dxf-worker.js", import.meta.url), {type: "module"});
+    const worker = new Worker(new URL("../../workers/review-dxf-worker.js", import.meta.url), {type: "module"});
     worker.onmessage = event => {
       worker.terminate();
       if (event.data?.error) reject(new Error(event.data.error));
@@ -49,6 +42,8 @@ function updateReadyState() {
 }
 
 function renderFindings() {
+  // 서버 결과의 page/location을 유지해 항목 클릭 시 도면의 근거 위치로 이동할 수 있다.
+  // 문서 원문은 escapeHtml을 거쳐 사용자 문서 내용이 HTML로 실행되지 않게 한다.
   const rows = state.findings.filter(item => state.filter === "all" || item.status === state.filter);
   $("#reviewList").innerHTML = rows.length ? rows.map(item => `
     <div class="review-row ${item.location ? "has-location" : ""}" data-id="${state.findings.indexOf(item)}">
@@ -123,6 +118,8 @@ function focusLocation(location) {
 }
 
 async function runReview() {
+  // 대용량 파일을 브라우저에서 문자열로 복제하지 않고 FormData의 File 객체로 전송한다.
+  // 서버는 도면 1건과 여러 검토 문서를 같은 요청 단위에서 대조한다.
   $("#reviewBtn").disabled = true;
   $("#reviewStatus").textContent = "도면 문자와 문서 요구사항을 분석하고 있습니다…";
   try {

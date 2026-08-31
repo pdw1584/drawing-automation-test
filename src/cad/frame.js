@@ -23,6 +23,7 @@ let hasOpenedDocument = false;
 let openQueue = Promise.resolve();
 
 function preventBrowserMiddleMouse(event) {
+  // Chrome 가운데 버튼 자동 스크롤이 CAD의 휠 버튼 pan 조작과 겹치므로 차단한다.
   if (event.button !== 1) return;
   event.preventDefault();
 }
@@ -31,6 +32,8 @@ document.addEventListener("mousedown", preventBrowserMiddleMouse, { capture: tru
 document.addEventListener("auxclick", preventBrowserMiddleMouse, { capture: true, passive: false });
 
 function bindViewSync() {
+  // 카메라 변경을 부모 창에 전달한다. 원격 카메라 적용 중에는 재전송을 억제해
+  // 두 iframe이 동일 메시지를 무한히 주고받는 피드백 루프를 방지한다.
   const view = manager?.curView;
   if (!view || boundView === view) return;
   boundView = view;
@@ -63,6 +66,8 @@ function applyCamera(center, zoom) {
 }
 
 function focusLocation(center) {
+  // 결과 클릭 시 현재 확대율은 유지하고 중심만 이동한다. 반복 클릭할수록 과도하게
+  // 확대되던 문제를 피하면서 사용자가 맞춘 상세 배율은 보존한다.
   const zoom = manager?.curView?.activeLayoutView?.trCamera?.zoom;
   if (!Number.isFinite(zoom) || zoom <= 0) return;
   applyCamera(center, zoom);

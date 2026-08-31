@@ -1,4 +1,4 @@
-import { decodeDxfFile } from "./dxf-encoding.js";
+import { decodeDxfFile } from "../shared/dxf-encoding.js";
 
 function records(sectionText) {
   const result = [], lines = sectionText.split("\n");

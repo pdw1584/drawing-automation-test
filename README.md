@@ -4,11 +4,28 @@ DWG/DXF 도면을 브라우저에서 렌더링하고, DXF 변경 위치를 좌�
 
 ## 실행
 
+Windows에서는 프로젝트 폴더의 `run-app.bat`을 더블클릭하면 의존성 확인, 빌드, 서버 실행이 순서대로 진행됩니다.
+
+직접 실행하려면 다음 명령을 사용합니다.
+
 ```powershell
 python -m pip install -r requirements.txt
 npm install
 npm start
 ```
+
+## 주요 코드 구조
+
+- `app.js`: 기존 HTML 경로를 유지하는 도면 비교 진입점
+- `pages/`: 비교 외 화면의 HTML 문서
+- `src/features/compare/`: 도면 비교 화면, 순수 비교 엔진, SVG 생성
+- `src/features/review/`: 문서 기반 도면 검토 화면
+- `src/features/convert/`: DWG → DXF 변환 화면
+- `src/features/equipment/`: 층별 장비 화면, 장비 분석, IndexedDB 저장
+- `src/shared/`: CAD iframe 연결, DXF 인코딩·문자 정리, 공통 UI 함수
+- `src/cad/`: iframe 내부 CAD 렌더러
+- `src/workers/`: 대용량 DXF 백그라운드 분석 Worker
+- `server.py`: 정적 파일, 문서 검토, 변환 API 서버
 
 이미 의존성을 설치했다면 다음 명령만 실행합니다.
 

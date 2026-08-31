@@ -7,6 +7,8 @@ const CAD_RUNTIME_VERSION = "20260831-2";
 let viewSyncEnabled = true;
 let viewAlignment = null;
 
+// 자동 정렬된 변경본 좌표와 원본 CAD 월드 좌표 사이를 왕복한다.
+// 렌더러 자체 좌표를 바꾸지 않고 메시지 경계에서만 변환해 모델 데이터는 보존한다.
 function transformPoint(point, inverse = false) {
   if (!viewAlignment?.applied || !point) return point;
   if (viewAlignment.mode !== "similarity") {
@@ -34,6 +36,8 @@ function transformZoom(zoom, inverse = false) {
 }
 
 function ensureFrame(side) {
+  // 각 도면은 독립 iframe에서 렌더링해 WebGL 상태와 대형 모델 메모리를 분리한다.
+  // iframe이 준비되기 전 선택된 파일은 pendingFiles에 보관했다가 ready 이후 전송한다.
   const host = document.querySelector(hostSelectors.get(side) || `#${side}Viewer`);
   if (!host) return null;
   let frame = frames.get(side);
@@ -54,6 +58,8 @@ async function postFile(side, file, generation) {
   if (sentFiles.get(side) === file) return;
   const frame = ensureFrame(side);
   if (!frame?.contentWindow) return;
+  // ArrayBuffer를 transfer list로 넘겨 대용량 파일 복사를 피한다. generation 검사는
+  // 이전 비동기 파일 읽기가 새 선택 결과를 뒤늦게 덮어쓰는 경쟁 상태를 막는다.
   const buffer = await file.arrayBuffer();
   if (pendingFiles.get(side)?.generation !== generation) return;
   frame.contentWindow.postMessage({
@@ -93,6 +99,7 @@ export function focusCadViews(centers) {
 }
 
 export function setCadViewSync(enabled) {
+  // 카메라 중심과 확대율만 공유하고 도면 모델 및 렌더링 상태는 iframe별로 유지한다.
   viewSyncEnabled = Boolean(enabled);
 }
 
