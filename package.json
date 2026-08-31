@@ -1,0 +1,20 @@
+{
+  "name": "drawing-automation-v0.1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "npm run build && python server.py"
+  },
+  "dependencies": {
+    "@mlightcad/cad-simple-viewer": "latest",
+    "@mlightcad/data-model": "latest",
+    "@mlightcad/libredwg-converter": "latest"
+  },
+  "devDependencies": {
+    "vite": "latest"
+  }
+}

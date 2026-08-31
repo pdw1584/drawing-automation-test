@@ -22,6 +22,7 @@ import fitz
 
 
 ROOT = Path(__file__).resolve().parent
+STATIC_ROOT = ROOT / "dist" if (ROOT / "dist" / "index.html").is_file() else ROOT
 MAX_UPLOAD = 80 * 1024 * 1024
 
 
@@ -211,9 +212,8 @@ def dxf_preview(data: bytes, expand_blocks: bool = True) -> dict:
         entity.pop("y2", None)
 
     blocks = parse_dxf_blocks(pairs) if expand_blocks else {}
-    expansion = {"count": 0, "limit": 1_000_000, "truncated": False, "omitted": 0}
     if blocks:
-        entities = expand_dxf_blocks(entities, blocks, tracker=expansion)
+        entities = expand_dxf_blocks(entities, blocks)
     coordinates = [point for entity in entities for point in entity["points"]]
     if coordinates:
         xs, ys = [point["x"] for point in coordinates], [point["y"] for point in coordinates]
@@ -224,7 +224,7 @@ def dxf_preview(data: bytes, expand_blocks: bool = True) -> dict:
         {"text": entity["text"], "page": 1, "x": entity["points"][0]["x"], "y": entity["points"][0]["y"], "w": 8, "h": 4}
         for entity in entities if entity["text"] and entity["points"]
     ]
-    return {"type": "dxf", "entities": entities, "bounds": bounds, "textItems": text_items, "blockCount": len(blocks), "truncated": expansion["truncated"], "omittedEntities": expansion["omitted"], "entityLimit": expansion["limit"]}
+    return {"type": "dxf", "entities": entities, "bounds": bounds, "textItems": text_items, "blockCount": len(blocks)}
 
 
 def parse_dxf_blocks(pairs: list[tuple[str, str]]) -> dict:
@@ -278,32 +278,16 @@ def transform_dxf_block_entity(source: dict, insert: dict, base: dict) -> dict:
     return entity
 
 
-def expand_dxf_blocks(entities: list[dict], blocks: dict, depth: int = 0, ancestry: frozenset = frozenset(), tracker: dict | None = None) -> list[dict]:
-    tracker = tracker or {"count": 0, "limit": 1_000_000, "truncated": False, "omitted": 0}
+def expand_dxf_blocks(entities: list[dict], blocks: dict, depth: int = 0) -> list[dict]:
     if depth > 8:
-        tracker["truncated"] = True
-        tracker["omitted"] += len(entities)
-        return []
-    expanded, direct_entities = [], []
-    for index, entity in enumerate(entities):
-        if tracker["count"] >= tracker["limit"]:
-            tracker["truncated"] = True
-            tracker["omitted"] += len(entities) - index
-            break
-        tracker["count"] += 1
+        return entities
+    expanded = []
+    for entity in entities:
         expanded.append(entity)
-        direct_entities.append(entity)
-    for entity in direct_entities:
-        if tracker["count"] >= tracker["limit"]:
-            definition = blocks.get(entity.get("block")) if entity.get("type") == "INSERT" else None
-            if definition:
-                tracker["truncated"] = True
-                tracker["omitted"] += len(definition["entities"])
-            continue
         definition = blocks.get(entity.get("block")) if entity.get("type") == "INSERT" else None
-        if definition and entity.get("block") not in ancestry:
+        if definition:
             children = [transform_dxf_block_entity(child, entity, definition["base"]) for child in definition["entities"]]
-            expanded.extend(expand_dxf_blocks(children, blocks, depth + 1, ancestry | {entity.get("block")}, tracker))
+            expanded.extend(expand_dxf_blocks(children, blocks, depth + 1))
     return expanded
 
 
@@ -528,7 +512,15 @@ def compare_pdfs(old_bytes: bytes, new_bytes: bytes) -> dict:
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+        super().__init__(*args, directory=str(STATIC_ROOT), **kwargs)
+
+    def end_headers(self) -> None:
+        request_path = self.path.split("?", 1)[0].lower()
+        if request_path.endswith((".html", ".js")) or request_path == "/":
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        super().end_headers()
 
     def do_POST(self) -> None:
         request_path = self.path.split("?", 1)[0].rstrip("/")

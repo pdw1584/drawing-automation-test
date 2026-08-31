@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CAD renderer</title>
+  <style>
+    html,
+    body,
+    #cad-container {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      touch-action: none;
+      background: #0c1420;
+    }
+
+    #cad-status {
+      position: fixed;
+      inset: 50% auto auto 50%;
+      z-index: 10;
+      max-width: 80%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: #dbeafe;
+      background: rgb(15 23 42 / 82%);
+      font: 12px/1.5 system-ui, sans-serif;
+      text-align: center;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    #cad-status[hidden] {
+      display: none;
+    }
+
+    #cad-focus-marker {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      z-index: 9;
+      width: 30px;
+      height: 30px;
+      border: 2px solid #f59e0b;
+      border-radius: 50%;
+      box-shadow: 0 0 0 4px rgb(245 158 11 / 25%);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: opacity .2s;
+    }
+
+    #cad-focus-marker[hidden] {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="cad-container"></div>
+  <div id="cad-focus-marker" hidden></div>
+  <div id="cad-status">렌더러 준비 중…</div>
+  <script type="module" src="/cad-frame.js"></script>
+</body>
+</html>

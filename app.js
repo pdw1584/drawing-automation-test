@@ -1,3 +1,5 @@
+import { fitCadViews, focusCadViews, renderCadFile, setCadViewSync } from "./cad-renderer.js";
+
 "use strict";
 
 const state = {
@@ -12,7 +14,6 @@ const state = {
   pdf: null,
   page: 1,
   documents: [],
-  focused: {old: null, new: null},
   diffs: [],
   alignment: null,
   filter: "all",
@@ -26,7 +27,6 @@ const state = {
 };
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const CANVAS_ENTITY_THRESHOLD = new URLSearchParams(location.search).has("canvas") ? 0 : 12000;
 
 function pairs(text) {
   const lines = text.replace(/\r/g, "").split("\n"),
@@ -89,37 +89,14 @@ function transformBlockEntity(source, insert, base) {
   return entity
 }
 
-function expandBlockEntities(entities, blocks, depth = 0, ancestry = new Set(), tracker = {count: 0, limit: 1000000, truncated: false, omitted: 0}) {
-  if (depth > 8) {
-    tracker.truncated = true;
-    tracker.omitted += entities.length;
-    return []
-  }
-  const expanded = [], directEntities = [];
-  for (let index = 0; index < entities.length; index++) {
-    if (tracker.count >= tracker.limit) {
-      tracker.truncated = true;
-      tracker.omitted += entities.length - index;
-      break
-    }
-    tracker.count++;
-    expanded.push(entities[index]);
-    directEntities.push(entities[index])
-  }
-  for (const entity of directEntities) {
-    if (tracker.count >= tracker.limit) {
-      if (entity.type === "INSERT" && blocks.has(entity.block)) {
-        tracker.truncated = true;
-        tracker.omitted += blocks.get(entity.block).entities.length
-      }
-      continue
-    }
-    if (entity.type !== "INSERT" || !blocks.has(entity.block) || ancestry.has(entity.block)) continue;
+function expandBlockEntities(entities, blocks, depth = 0) {
+  if (depth > 8) return entities;
+  const expanded = [];
+  for (const entity of entities) {
+    expanded.push(entity);
+    if (entity.type !== "INSERT" || !blocks.has(entity.block)) continue;
     const definition = blocks.get(entity.block), children = definition.entities.map(child => transformBlockEntity(child, entity, definition.base));
-    const nextAncestry = new Set(ancestry);
-    nextAncestry.add(entity.block);
-    const descendants = expandBlockEntities(children, blocks, depth + 1, nextAncestry, tracker);
-    for (const descendant of descendants) expanded.push(descendant)
+    expanded.push(...expandBlockEntities(children, blocks, depth + 1))
   }
   return expanded
 }
@@ -189,17 +166,13 @@ function parseDxf(text, name = "drawing.dxf", expandBlocks = true) {
     else if (code === "2") current.block = value;
   }
   finish();
-  const blocks = expandBlocks ? parseBlockDefinitions(p) : new Map(), expansion = {count: 0, limit: 1000000, truncated: false, omitted: 0},
-    finalEntities = expandBlocks ? expandBlockEntities(entities, blocks, 0, new Set(), expansion) : entities,
+  const blocks = expandBlocks ? parseBlockDefinitions(p) : new Map(), finalEntities = expandBlocks ? expandBlockEntities(entities, blocks) : entities,
     bounds = getBounds(finalEntities);
   return {
     name,
     entities: finalEntities,
     bounds,
-    blockCount: blocks.size,
-    truncated: expansion.truncated,
-    omittedEntities: expansion.omitted,
-    entityLimit: expansion.limit
+    blockCount: blocks.size
   };
 }
 
@@ -240,16 +213,12 @@ function entityBounds(e) {
     xs = [pts[0].x - e.radius, pts[0].x + e.radius];
     ys = [pts[0].y - e.radius, pts[0].y + e.radius]
   }
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const x of xs) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys)
   }
-  for (const y of ys) {
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y
-  }
-  return {minX, maxX, minY, maxY}
 }
 
 function getBounds(es) {
@@ -259,15 +228,13 @@ function getBounds(es) {
     maxX: 100,
     maxY: 100
   };
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const entity of es) {
-    const bounds = entityBounds(entity);
-    if (bounds.minX < minX) minX = bounds.minX;
-    if (bounds.minY < minY) minY = bounds.minY;
-    if (bounds.maxX > maxX) maxX = bounds.maxX;
-    if (bounds.maxY > maxY) maxY = bounds.maxY
+  const bs = es.map(entityBounds);
+  return {
+    minX: Math.min(...bs.map(b => b.minX)),
+    minY: Math.min(...bs.map(b => b.minY)),
+    maxX: Math.max(...bs.map(b => b.maxX)),
+    maxY: Math.max(...bs.map(b => b.maxY))
   }
-  return {minX, minY, maxX, maxY}
 }
 
 function distance(a, b) {
@@ -372,16 +339,11 @@ function estimateAlignment(oldD, newD) {
   if (similarity) return similarity;
   const span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1),
     step = Math.max(span * .002, .01),
-    bins = new Map(), sample = entities => {
-      if (entities.length <= 2000) return entities;
-      const sampled = [], stride = Math.ceil(entities.length / 2000);
-      for (let index = 0; index < entities.length; index += stride) sampled.push(entities[index]);
-      return sampled
-    }, oldSample = sample(oldD.entities), newSample = sample(newD.entities);
-  for (const o of oldSample) {
+    bins = new Map();
+  for (const o of oldD.entities) {
     const key = shapeSignature(o),
       oc = entityCenter(o);
-    for (const n of newSample) {
+    for (const n of newD.entities) {
       if (shapeSignature(n) !== key) continue;
       const nc = entityCenter(n),
         dx = oc.x - nc.x,
@@ -430,43 +392,23 @@ function translateDrawing(d, dx, dy) {
 
 function compare(oldD, newD) {
   const unused = new Set(newD.entities.map((_, i) => i)),
-    diffs = [], signatureBuckets = new Map(), globalSpan = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1),
-    cellSize = globalSpan / 400, spatial = newD.entities.length > 5000 ? new Map() : null;
-  for (let index = 0; index < newD.entities.length; index++) {
-    const entity = newD.entities[index], key = signature(entity);
-    if (!signatureBuckets.has(key)) signatureBuckets.set(key, []);
-    signatureBuckets.get(key).push(index);
-    if (spatial) {
-      const center = entityCenter(entity), spatialKey = `${entity.type}:${Math.floor(center.x/cellSize)}:${Math.floor(center.y/cellSize)}`;
-      if (!spatial.has(spatialKey)) spatial.set(spatialKey, []);
-      spatial.get(spatialKey).push(index)
-    }
-  }
+    diffs = [];
   oldD.entities.forEach((o, oi) => {
     let exact = -1;
-    const exactCandidates = signatureBuckets.get(signature(o));
-    while (exactCandidates?.length && exact < 0) {
-      const candidate = exactCandidates.pop();
-      if (unused.has(candidate)) exact = candidate
-    }
+    for (const ni of unused)
+      if (signature(o) === signature(newD.entities[ni])) {
+        exact = ni;
+        break
+      }
     if (exact >= 0) {
       unused.delete(exact);
       return
     }
     const oc = entityCenter(o),
-      span = globalSpan;
+      span = Math.max(oldD.bounds.maxX - oldD.bounds.minX, oldD.bounds.maxY - oldD.bounds.minY, 1);
     let best = -1,
       score = Infinity;
-    let candidates = unused;
-    if (spatial) {
-      candidates = [];
-      const gridX = Math.floor(oc.x / cellSize), gridY = Math.floor(oc.y / cellSize);
-      for (let offsetX = -2; offsetX <= 2; offsetX++) for (let offsetY = -2; offsetY <= 2; offsetY++) {
-        const bucket = spatial.get(`${o.type}:${gridX+offsetX}:${gridY+offsetY}`);
-        if (bucket) for (const index of bucket) if (unused.has(index)) candidates.push(index)
-      }
-    }
-    for (const ni of candidates) {
+    for (const ni of unused) {
       const n = newD.entities[ni];
       if (n.type !== o.type) continue;
       const d = distance(oc, entityCenter(n)) / span + (n.layer === o.layer ? 0 : .04) + ((n.text || "") === (o.text || "") ? 0 : .06);
@@ -535,81 +477,13 @@ function labelType(t) {
   })[t] || t
 }
 
-function canvasPoint(point, canvas) {
-  const scale = Math.min(canvas.clientWidth / state.view.w, canvas.clientHeight / state.view.h),
-    offsetX = (canvas.clientWidth - state.view.w * scale) / 2, offsetY = (canvas.clientHeight - state.view.h * scale) / 2;
-  return {
-    x: offsetX + (point.x - state.view.x) * scale,
-    y: offsetY + (-point.y - state.view.y) * scale
-  }
-}
-
-function drawCanvasEntity(context, canvas, entity) {
-  const point = value => canvasPoint(value, canvas), drawingScale = Math.min(canvas.clientWidth / state.view.w, canvas.clientHeight / state.view.h);
-  context.beginPath();
-  if (entity.type === "LINE" && entity.points.length > 1) {
-    const start = point(entity.points[0]), end = point(entity.points[1]);
-    context.moveTo(start.x, start.y); context.lineTo(end.x, end.y)
-  } else if (["CIRCLE", "ARC"].includes(entity.type) && entity.points[0]) {
-    const center = point(entity.points[0]), radius = (entity.radius || 1) * drawingScale;
-    if (entity.type === "CIRCLE") context.arc(center.x, center.y, radius, 0, Math.PI * 2);
-    else context.arc(center.x, center.y, radius, -(entity.endAngle || 0) * Math.PI / 180, -(entity.startAngle || 0) * Math.PI / 180)
-  } else if (["TEXT", "MTEXT"].includes(entity.type) && entity.points[0]) {
-    const position = point(entity.points[0]), size = Math.max(7, (entity.height || 3) * drawingScale);
-    context.save(); context.translate(position.x, position.y); context.rotate(-(entity.rotation || 0) * Math.PI / 180); context.font = `${size}px sans-serif`; context.fillText(entity.text || "", 0, 0); context.restore(); return
-  } else if (entity.type === "DIMENSION" && entity.points.length > 2) {
-    const definition = point(entity.points[0]), first = point(entity.points.at(-2)), second = point(entity.points.at(-1));
-    context.moveTo(first.x, first.y); context.lineTo(second.x, second.y); context.moveTo(first.x, first.y); context.lineTo(definition.x, definition.y); context.moveTo(second.x, second.y); context.lineTo(definition.x, definition.y)
-  } else if (["POINT", "INSERT"].includes(entity.type) && entity.points[0]) {
-    const center = point(entity.points[0]); context.arc(center.x, center.y, 2, 0, Math.PI * 2)
-  } else if (entity.points.length) {
-    const points = entity.closed ? [...entity.points, entity.points[0]] : entity.points, start = point(points[0]);
-    context.moveTo(start.x, start.y);
-    for (let index = 1; index < points.length; index++) {
-      const previous = points[index - 1], current = points[index], end = point(current), bulge = previous.bulge || 0;
-      if (Math.abs(bulge) < 1e-9) context.lineTo(end.x, end.y);
-      else {
-        const dx = current.x - previous.x, dy = current.y - previous.y, chord = Math.hypot(dx, dy),
-          offset = chord * (1 - bulge * bulge) / (4 * bulge), centerCad = {x: (previous.x + current.x) / 2 - dy / chord * offset, y: (previous.y + current.y) / 2 + dx / chord * offset},
-          center = point(centerCad), startScreen = point(previous), radius = Math.hypot(startScreen.x - center.x, startScreen.y - center.y),
-          startAngle = Math.atan2(startScreen.y - center.y, startScreen.x - center.x), endAngle = Math.atan2(end.y - center.y, end.x - center.x);
-        context.arc(center.x, center.y, radius, startAngle, endAngle, bulge < 0)
-      }
-    }
-  }
-  context.stroke()
-}
-
-function drawCanvas(which) {
-  const drawing = state[which], canvas = $(`#${which}Viewer canvas`);
-  if (!drawing || !canvas) return;
-  const ratio = window.devicePixelRatio || 1, width = canvas.clientWidth, height = canvas.clientHeight;
-  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
-    canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio)
-  }
-  const context = canvas.getContext("2d");
-  context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height); context.lineWidth = 1;
-  const diffByIndex = new Map();
-  for (const diff of state.diffs) {
-    const index = which === "old" ? diff.oldIndex : diff.newIndex;
-    if (index != null) diffByIndex.set(index, diff.kind)
-  }
-  for (let index = 0; index < drawing.entities.length; index++) {
-    const entity = drawing.entities[index], kind = diffByIndex.get(index);
-    context.strokeStyle = kind === "added" ? "#16a34a" : kind === "removed" ? "#dc2626" : kind === "changed" ? "#ea8a00" : "#bac5d1";
-    context.fillStyle = context.strokeStyle;
-    context.lineWidth = state.focused[which] === index ? 4 : (kind ? 2 : 1);
-    drawCanvasEntity(context, canvas, entity)
-  }
-}
-
 function renderDrawing(which) {
   const drawing = state[which],
     host = $(which === "old" ? "#oldViewer" : "#newViewer");
   if (!drawing) return;
-  if (drawing.entities.length > CANVAS_ENTITY_THRESHOLD) {
-    host.innerHTML = `<canvas class="drawing-canvas" data-side="${which}"></canvas>`;
-    applyView(); bindPan(host); drawCanvas(which); return
+  if (state.files[which]) {
+    renderCadFile(which, state.files[which]);
+    return
   }
   host.innerHTML = `<svg data-side="${which}" preserveAspectRatio="xMidYMid meet"><g></g></svg>`;
   const g = host.querySelector("g");
@@ -621,10 +495,6 @@ function renderDrawing(which) {
 function renderOverlay() {
   const host = $("#overlayViewer");
   if (!state.old || !state.new) return;
-  if (state.old.entities.length > CANVAS_ENTITY_THRESHOLD || state.new.entities.length > CANVAS_ENTITY_THRESHOLD) {
-    host.innerHTML = '<canvas class="drawing-canvas overlay-canvas"></canvas>';
-    bindPan(host); drawOverlayCanvas(); return
-  }
   host.innerHTML = '<svg data-side="overlay" preserveAspectRatio="xMidYMid meet"><g class="old-layer"></g><g class="new-layer"></g></svg>';
   const oldG = host.querySelector(".old-layer"),
     newG = host.querySelector(".new-layer");
@@ -642,19 +512,6 @@ function arcPath(entity) {
     x1 = center.x + radius * Math.cos(start), y1 = -(center.y + radius * Math.sin(start)),
     x2 = center.x + radius * Math.cos(end), y2 = -(center.y + radius * Math.sin(end));
   return `M ${x1} ${y1} A ${radius} ${radius} 0 ${delta > 180 ? 1 : 0} 0 ${x2} ${y2}`
-}
-
-function drawOverlayCanvas() {
-  const canvas = $("#overlayViewer canvas");
-  if (!canvas || !state.old || !state.new) return;
-  const ratio = window.devicePixelRatio || 1, width = canvas.clientWidth, height = canvas.clientHeight;
-  canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
-  const context = canvas.getContext("2d"); context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height); context.lineWidth = 1;
-  context.globalAlpha = .72; context.strokeStyle = "#ef4444"; context.fillStyle = "#ef4444";
-  for (const entity of state.old.entities) drawCanvasEntity(context, canvas, entity);
-  context.globalAlpha = $("#opacityRange").value / 100; context.strokeStyle = "#22c55e"; context.fillStyle = "#22c55e";
-  for (const entity of state.new.entities) drawCanvasEntity(context, canvas, entity);
-  context.globalAlpha = 1
 }
 
 function polylinePath(entity) {
@@ -704,6 +561,7 @@ function escapeHtml(s) {
 }
 
 function fit() {
+  if (state.mode !== "pdf" && (state.files.old || state.files.new)) fitCadViews();
   if (state.mode === "pdf" && state.pdf) {
     const page = state.pdf.pages[state.page - 1];
     state.view = {
@@ -716,10 +574,8 @@ function fit() {
     return
   }
   if (!state.old && !state.new) return;
-  const all = [];
-  for (const entity of state.old?.entities || []) all.push(entity);
-  for (const entity of state.new?.entities || []) all.push(entity);
-  const b = getBounds(all),
+  const all = [...(state.old?.entities || []), ...(state.new?.entities || [])],
+    b = getBounds(all),
     pad = Math.max(b.maxX - b.minX, b.maxY - b.minY) * .08 || 5;
   state.view = {
     x: b.minX - pad,
@@ -732,9 +588,6 @@ function fit() {
 
 function applyView() {
   for (const svg of $$(".viewer svg")) svg.setAttribute("viewBox", `${state.view.x} ${state.view.y} ${state.view.w} ${state.view.h}`)
-  drawCanvas("old");
-  drawCanvas("new");
-  drawOverlayCanvas()
 }
 
 function bindPan(host) {
@@ -802,9 +655,8 @@ function focusDiff(d) {
     $$(`[data-change-id="${d.id}"]`).forEach(e => e.classList.add("focused"));
     return
   }
-  state.focused.old = d.oldIndex ?? null;
-  state.focused.new = d.newIndex ?? null;
   const size = Math.max(state.view.w, state.view.h) * .2;
+  focusCadViews(d.center);
   state.view = {
     x: d.center.x - size / 2,
     y: -d.center.y - size / 2,
@@ -815,8 +667,6 @@ function focusDiff(d) {
   $$('.entity.focused').forEach(e => e.classList.remove('focused'));
   if (d.oldIndex != null) $(`#oldViewer [data-index="${d.oldIndex}"]`)?.classList.add("focused");
   if (d.newIndex != null) $(`#newViewer [data-index="${d.newIndex}"]`)?.classList.add("focused")
-  drawCanvas("old");
-  drawCanvas("new")
 }
 async function loadFile(input, side) {
   const f = input.files[0];
@@ -824,16 +674,28 @@ async function loadFile(input, side) {
   const dropzone = $(`#${side}Drop`);
   dropzone.classList.remove("error");
   const isPdf = f.name.toLowerCase().endsWith(".pdf");
+  const isDwg = f.name.toLowerCase().endsWith(".dwg");
   const other = state.files[side === "old" ? "new" : "old"];
   if (other && other.name.toLowerCase().endsWith(".pdf") !== isPdf) {
     $("#status").textContent = "비교할 두 파일은 같은 형식이어야 합니다.";
     return
   }
-  state.mode = isPdf ? "pdf" : "dxf";
+  state.mode = isPdf ? "pdf" : isDwg ? "dwg" : "dxf";
   $(`#${side}Name`).textContent = `${f.name} · ${(f.size / 1024 / 1024).toFixed(2)}MB`;
   if (isPdf) {
     state.files[side] = f;
     $("#status").textContent = "PDF 두 파일을 선택한 뒤 도면 비교를 누르세요.";
+    return
+  }
+  if (isDwg) {
+    state.files[side] = f;
+    if (side === "new") {
+      state.rawNew = null;
+      state.new = null
+    } else state.old = null;
+    renderCadFile(side, f);
+    $(`#${side}Name`).textContent = `${f.name} · ${(f.size / 1024 / 1024).toFixed(2)}MB · LibreDWG`;
+    $("#status").textContent = "DWG를 브라우저에서 렌더링하고 있습니다. 현재 DWG는 화면 확인을 지원하며 변경 목록 계산은 DXF를 사용합니다.";
     return
   }
   $("#pageControl").hidden = true;
@@ -843,18 +705,17 @@ async function loadFile(input, side) {
     const text = await f.text();
     if (text.startsWith("AutoCAD Binary DXF")) throw new Error("바이너리 DXF는 아직 지원하지 않습니다. ASCII DXF로 저장하세요.");
     if (!/\bSECTION\b[\s\S]*\bENTITIES\b/.test(text)) throw new Error("DXF의 ENTITIES 섹션을 찾지 못했습니다.");
-    const drawing = parseDxf(text, f.name);
+    const drawing = parseDxf(text, f.name, false);
     if (!drawing.entities.length) throw new Error("표시할 수 있는 DXF 객체를 찾지 못했습니다. 지원 객체 또는 파일 형식을 확인하세요.");
     state.files[side] = f;
     if (side === "new") {
       state.rawNew = drawing;
       state.new = cloneDrawing(drawing)
     } else state.old = drawing;
-    const safeModeText = drawing.truncated ? ` · 안전 모드(일부 블록 생략)` : "";
-    $(`#${side}Name`).textContent = `${f.name} · ${drawing.entities.length}개 객체 · 블록 ${drawing.blockCount || 0}개${safeModeText}`;
+    $(`#${side}Name`).textContent = `${f.name} · ${drawing.entities.length}개 객체 · 블록 ${drawing.blockCount || 0}개`;
     renderDrawing(side);
     fit();
-    $("#status").textContent = drawing.truncated ? `${side === "old" ? "원본" : "변경본"}을 대용량 안전 모드로 불러왔습니다. 블록 내부 일부가 생략되어 비교 결과가 완전하지 않을 수 있습니다.` : `${side === "old" ? "원본" : "변경본"} 도면을 정상적으로 인식했습니다.`
+    $("#status").textContent = `${side === "old" ? "원본" : "변경본"} 도면을 정상적으로 인식했습니다.`
   } catch (error) {
     state.files[side] = null;
     if (side === "new") {
@@ -873,7 +734,7 @@ async function runCompare() {
     return
   }
   if (!state.old || !state.rawNew) {
-    $("#status").textContent = "원본과 변경본 DXF를 모두 선택하세요.";
+    $("#status").textContent = "변경 목록을 계산하려면 원본과 변경본 DXF를 모두 선택하세요.";
     return
   }
   state.new = cloneDrawing(state.rawNew);
@@ -888,8 +749,7 @@ async function runCompare() {
   $("#exportBtn").disabled = false;
   const a = state.alignment,
     alignText = $("#alignToggle").checked && a.applied ? (a.mode === "similarity" ? ` · 자동 정렬 회전 ${(a.angle*180/Math.PI).toFixed(2)}°, 축척 ${a.scale.toFixed(4)} (${a.votes}개 앵커)` : ` · 자동 정렬 ΔX ${a.dx.toFixed(2)}, ΔY ${a.dy.toFixed(2)} (${a.votes}개 기준 객체)`) : " · 자동 정렬 없음";
-  const safeModeWarning = state.old.truncated || state.new.truncated ? " · ⚠ 대용량 안전 모드: 생략된 블록 내부는 비교 제외" : "";
-  $("#status").textContent = `비교 완료: ${state.old.entities.length}개 ↔ ${state.new.entities.length}개 객체${alignText}${safeModeWarning}`
+  $("#status").textContent = `비교 완료: ${state.old.entities.length}개 ↔ ${state.new.entities.length}개 객체${alignText}`
 }
 
 function transformDrawing(drawing, alignment) {
@@ -1096,6 +956,7 @@ $("#oldFile").onchange = e => loadFile(e.target, "old");
 $("#newFile").onchange = e => loadFile(e.target, "new");
 $("#compareBtn").onclick = runCompare;
 $("#fitBtn").onclick = fit;
+$("#viewSyncToggle").onchange = e => setCadViewSync(e.target.checked);
 $("#pageSelect").onchange = e => {
   state.page = Number(e.target.value);
   renderPdfPage()
@@ -1107,8 +968,7 @@ $("#overlayBtn").onclick = () => {
   if (!p.hidden) renderOverlay()
 };
 $("#opacityRange").oninput = e => {
-  $("#overlayViewer .new-layer")?.style.setProperty("opacity", e.target.value / 100);
-  drawOverlayCanvas()
+  $("#overlayViewer .new-layer")?.style.setProperty("opacity", e.target.value / 100)
 };
 $("#sampleBtn").onclick = () => {
   state.mode = "dxf";

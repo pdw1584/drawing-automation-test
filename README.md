@@ -1,6 +1,6 @@
 # 도면자동화 v0.1
 
-두 ASCII DXF 도면을 브라우저에서 비교하고, 변경 위치를 좌우 도면에서 확인하는 프로토타입입니다.
+DWG/DXF 도면을 브라우저에서 렌더링하고, DXF 변경 위치를 좌우 도면과 목록에서 확인하는 프로토타입입니다.
 
 ## 실행
 
@@ -8,13 +8,14 @@
 python server.py
 ```
 
-브라우저에서 `http://localhost:8000`을 열고 **샘플 불러오기** 또는 DXF 두 파일을 선택합니다.
+브라우저에서 `http://localhost:8000`을 열고 **샘플 불러오기** 또는 DWG/DXF 파일을 선택합니다.
 
 ## 페이지 구성
 
-- `index.html`: DXF 두 도면의 변경 비교
+- `index.html`: DWG/DXF 두 도면 표시와 DXF 변경 비교
 - `review.html`: DXF/PDF 도면과 시방서·자재승인서 대조
 - `convert.html`: DWG 파일을 DXF로 변환
+- `render-test.html`: 비교 분석 없이 DWG/DXF 렌더러만 단독 시험
 - DWG는 한 번에 최대 50개까지 선택할 수 있으며, 여러 결과는 ZIP으로 다운로드됩니다.
 - 한 파일은 원본 이름의 DXF로 저장되고, 여러 파일은 사용자가 지정한 이름의 ZIP으로 저장됩니다.
 
@@ -25,8 +26,6 @@ DWG 변환에는 ODA File Converter가 필요합니다. `C:\Program Files\ODA\OD
 - ASCII DXF의 LINE, CIRCLE, ARC, LWPOLYLINE, POLYLINE, TEXT, MTEXT, INSERT, POINT
 - ARC 시작·끝 각도, 닫힌/곡선 폴리라인, 문자 높이·회전, 기본 DIMENSION 표시
 - BLOCKS/INSERT 내부 형상 전개, 삽입점·회전·축척·레이어 상속 및 중첩 블록 처리
-- 12,000개 초과 도면은 Canvas 렌더러로 자동 전환하며 최대 1,000,000개 전개 객체를 처리
-- 대용량 비교는 객체 서명 인덱스와 위치 공간 인덱스를 사용해 전체 반복 탐색을 방지
 - 추가·삭제·위치/문자/형상 변경 분류
 - 좌우 동기화 확대, 이동, 전체 보기
 - 변경 목록 필터와 클릭 위치 이동
@@ -44,7 +43,25 @@ DWG 변환에는 ODA File Converter가 필요합니다. `C:\Program Files\ODA\OD
 
 ## 제한 및 다음 단계
 
-- 바이너리 DXF와 DWG는 아직 지원하지 않습니다. DWG 변환 서비스는 서버 단계에서 연결합니다.
+- DWG는 LibreDWG WebAssembly로 브라우저 렌더링하며, DWG 변경 목록 계산은 아직 지원하지 않습니다.
+- 바이너리 DXF는 변경 목록 계산에서 지원하지 않습니다.
 - DXF 비교 페이지는 ASCII DXF만 인식하며, 바이너리·ENTITIES 누락·지원 객체 0개인 파일은 화면에 원인을 표시합니다.
 - 자동 정렬은 앵커가 충분하면 회전·축척·평행 이동을 함께 보정하고, 부족하면 평행 이동만 보정합니다.
 - PDF 및 시방서 검토는 백엔드 문서 처리 파이프라인으로 추가할 예정입니다.
+# 고성능 CAD 렌더러 빌드
+
+도면 비교 화면은 `@mlightcad/cad-simple-viewer`와 LibreDWG WebAssembly를 사용합니다.
+최초 실행 또는 프런트엔드 파일을 수정한 뒤 다음 명령으로 빌드합니다.
+
+```powershell
+npm install
+npm start
+```
+
+Python 서버는 `dist/index.html`이 있으면 빌드 결과를 우선 제공합니다. DWG 파서는
+GPL-3.0인 `@mlightcad/libredwg-converter`를 별도 Web Worker에서 실행합니다.
+
+`index.html`을 파일로 직접 열거나 VS Code Live Server로 원본 폴더를 제공하면 npm의
+bare module import를 해석할 수 없습니다. 전체 앱은 반드시 `npm start`로 실행하고
+`http://127.0.0.1:8000`으로 접속합니다. 렌더러 UI만 개발할 때는 `npm run dev` 후
+Vite가 표시하는 주소를 사용할 수 있습니다.

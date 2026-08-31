@@ -3,17 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>도면자동화 v0.1</title>
+  <title>도면 비교 · 도면자동화 v0.1</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="features.css">
 </head>
 <body>
   <header class="topbar">
-    <div><strong>도면자동화 v0.1</strong><span>도면 변경 검토 MVP</span></div>
+    <div><strong>도면자동화 v0.1</strong><span>DWG/DXF 도면 변경 검토</span></div>
     <nav class="main-nav">
-      <a href="index.html" class="active">DXF 비교</a>
+      <a href="index.html" class="active">도면 비교</a>
       <a href="review.html">문서 기반 검토</a>
-      <a href="convert.html">DWG 변환</a>
+      <a href="convert.html">DWG → DXF 변환</a>
+      <a href="render-test.html">렌더링 테스트</a>
     </nav>
     <div class="actions">
       <button id="sampleBtn" class="secondary">샘플 불러오기</button>
@@ -25,23 +26,24 @@
   <main>
     <section class="upload-grid">
       <label class="dropzone" id="oldDrop">
-        <input id="oldFile" type="file" accept=".dxf">
-        <b>원본 도면</b><span id="oldName">DXF 파일을 선택하거나 끌어 놓으세요</span>
+        <input id="oldFile" type="file" accept=".dxf,.dwg">
+        <b>원본 도면</b><span id="oldName">DWG 또는 DXF 파일을 선택하거나 끌어 놓으세요</span>
       </label>
       <label class="dropzone" id="newDrop">
-        <input id="newFile" type="file" accept=".dxf">
-        <b>변경 도면</b><span id="newName">DXF 파일을 선택하거나 끌어 놓으세요</span>
+        <input id="newFile" type="file" accept=".dxf,.dwg">
+        <b>변경 도면</b><span id="newName">DWG 또는 DXF 파일을 선택하거나 끌어 놓으세요</span>
       </label>
     </section>
 
     <section class="toolbar">
-      <div id="status">두 DXF 도면을 업로드하세요.</div>
+      <div id="status">비교할 DWG 또는 DXF 도면 두 개를 업로드하세요.</div>
       <div class="legend"><i class="removed"></i>삭제 <i class="added"></i>추가 <i class="changed"></i>변경</div>
       <button id="fitBtn" class="secondary small">전체 보기</button>
       <label id="pageControl" class="page-control" hidden>페이지 <select id="pageSelect"></select></label>
       <button id="overlayBtn" class="secondary small">겹쳐보기</button>
       <label class="check"><input id="alignToggle" type="checkbox" checked> 기준점 자동 정렬</label>
-      <span>확대·이동 동기화</span>
+      <label class="check"><input id="viewSyncToggle" type="checkbox" checked> 화면 이동 동기화</label>
+      <span>WebGL 렌더링</span>
     </section>
 
     <section class="viewer-grid">
@@ -68,6 +70,6 @@
     </section>
 
   </main>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

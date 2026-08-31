@@ -1,0 +1,30 @@
+[
+  {
+    "name": [
+      "Noto Sans CJK KR",
+      "NotoSansCJKkr-Regular",
+      "NotoSansCJKkr",
+      "Noto Sans KR",
+      "Malgun Gothic",
+      "맑은 고딕",
+      "Gulim",
+      "굴림",
+      "Dotum",
+      "돋움",
+      "Batang",
+      "바탕",
+      "Arial Unicode MS",
+      "hztxt",
+      "simsun",
+      "txt",
+      "simplex",
+      "romans",
+      "romand",
+      "whgtxt",
+      "Standard"
+    ],
+    "file": "NotoSansCJKkr-Regular.otf",
+    "type": "mesh",
+    "description": "Korean and CJK fallback font (SIL Open Font License 1.1)"
+  }
+]
