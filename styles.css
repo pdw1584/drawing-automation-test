@@ -23,9 +23,19 @@ body {
   padding: 0 28px;
   background: #111827;
   color: white;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between
+  gap: 20px
+}
+
+.header-brand {
+  min-width: 0;
+  white-space: nowrap
+}
+
+.header-actions {
+  justify-self: end
 }
 
 .topbar strong {

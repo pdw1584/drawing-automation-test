@@ -1,6 +1,6 @@
 const DB_NAME = "drawing-automation-equipment";
 const STORE_NAME = "drawings";
-const ANALYSIS_VERSION = 4;
+const ANALYSIS_VERSION = 8;
 
 const fileInput = document.querySelector("#renderFile");
 const frame = document.querySelector("#renderFrame");
@@ -20,6 +20,7 @@ let rendererReady = false;
 let renderGeneration = 0;
 let startedAt = 0;
 let equipmentPriorities = [];
+let selectedEquipmentCategory = "";
 
 async function loadEquipmentPriorities() {
   const response = await fetch("/equipment-priority.json", {cache: "no-store"});
@@ -112,6 +113,54 @@ function equipmentLabel(sourceName, classification) {
   return tagged || classification.category
 }
 
+const PANEL_LINK_CATEGORIES = new Set(["UPS", "STS", "Battery", "변압기", "HV", "LV", "RF"]);
+
+function panelNameFromText(value) {
+  const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
+  const matches = text.match(/(?:B?\d{1,2}F|RF|PH)(?:\s*[-_/]\s*[A-Z0-9]{1,8}){1,4}/g) || [];
+  const match = matches.find(name => !/(?:UPS|STS|BAT|TR)/.test(name));
+  return match ? match.replace(/\s*[-_/]\s*/g, "-") : ""
+}
+
+function rfPanelNameFromText(value) {
+  const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
+  const match = text.match(/(?:^|[^A-Z0-9])(\d{1,3}[A-Z](?:\s*[-_/]\s*\d{1,3})?)(?:[^A-Z0-9]|$)/);
+  return match ? match[1].replace(/\s*[-_/]\s*/g, "-") : ""
+}
+
+function distanceBetween(first, second) {
+  return Math.hypot(first.x - second.x, first.y - second.y)
+}
+
+function attachNearbyPanelNames(equipment, textItems) {
+  const panels = (textItems || []).map(item => ({...item, panelName: panelNameFromText(item.text || "")}))
+    .filter(item => item.panelName);
+  const rfPanels = (textItems || []).map(item => ({
+    ...item,
+    panelName: panelNameFromText(item.text || "") ? "" : rfPanelNameFromText(item.text || "")
+  }))
+    .filter(item => item.panelName);
+  if (!panels.length && !rfPanels.length) return equipment;
+
+  const linkable = equipment.filter(item => PANEL_LINK_CATEGORIES.has(item.category));
+  for (const item of linkable) {
+    const panelCandidates = item.category === "RF" ? rfPanels : panels;
+    const nearestPanel = panelCandidates.map(panel => ({panel, distance: distanceBetween(item, panel)}))
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (!nearestPanel) continue;
+
+    const nearestPeerDistance = linkable.filter(peer => peer !== item && distanceBetween(item, peer) > .001)
+      .reduce((nearest, peer) => Math.min(nearest, distanceBetween(item, peer)), Number.POSITIVE_INFINITY);
+    const textScaleLimit = Math.max(item.height || 0, nearestPanel.panel.h || 0, 1) * 100;
+    const peerLimit = Number.isFinite(nearestPeerDistance) ? nearestPeerDistance * 2 : 0;
+    if (nearestPanel.distance > Math.max(textScaleLimit, peerLimit)) continue;
+
+    item.panelName = nearestPanel.panel.panelName;
+    item.name = `${item.name} · ${item.panelName}`
+  }
+  return equipment
+}
+
 function equipmentCandidates(textItems) {
   const seen = new Set(), equipment = [];
   for (const item of textItems || []) {
@@ -126,7 +175,8 @@ function equipmentCandidates(textItems) {
     seen.add(key);
     equipment.push({name: label, sourceName: name, x: item.x, y: item.y, width: item.w, height: item.h, ...classification})
   }
-  return equipment.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
+  return attachNearbyPanelNames(equipment, textItems)
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
 }
 
 function analyzeDxf(file) {
@@ -165,13 +215,31 @@ function renderDrawingList() {
 
 function renderEquipmentList() {
   if (!activeDrawing) {
+    document.querySelector("#equipmentFilters").innerHTML = "";
     document.querySelector("#equipmentList").innerHTML = '<div class="empty-row">선택된 도면이 없습니다.</div>';
     return
   }
   const query = searchInput.value.trim().toLocaleUpperCase("ko-KR");
   const documentedEquipment = activeDrawing.equipment.filter(item => item.priority < Number.MAX_SAFE_INTEGER);
-  const rows = documentedEquipment.filter(item => !query || item.name.toLocaleUpperCase("ko-KR").includes(query));
-  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 문서 기준 장비 ${documentedEquipment.length.toLocaleString("ko-KR")}개${query ? ` · 검색 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
+  const categoryCounts = new Map();
+  for (const item of documentedEquipment) categoryCounts.set(item.category, (categoryCounts.get(item.category) || 0) + 1);
+  if (selectedEquipmentCategory && !categoryCounts.has(selectedEquipmentCategory)) selectedEquipmentCategory = "";
+  const categories = [...categoryCounts].sort((a, b) => {
+    const firstPriority = documentedEquipment.find(item => item.category === a[0])?.priority ?? Number.MAX_SAFE_INTEGER;
+    const secondPriority = documentedEquipment.find(item => item.category === b[0])?.priority ?? Number.MAX_SAFE_INTEGER;
+    return firstPriority - secondPriority || a[0].localeCompare(b[0], "ko")
+  });
+  document.querySelector("#equipmentFilters").innerHTML = `
+    <button class="equipment-filter ${selectedEquipmentCategory ? "" : "active"}" data-category="">전체 <span>${documentedEquipment.length.toLocaleString("ko-KR")}</span></button>
+    ${categories.map(([category, count]) => `<button class="equipment-filter ${selectedEquipmentCategory === category ? "active" : ""}" data-category="${escapeHtml(category)}">${escapeHtml(category)} <span>${count.toLocaleString("ko-KR")}</span></button>`).join("")}
+  `;
+  const rows = documentedEquipment.filter(item => {
+    const categoryMatched = !selectedEquipmentCategory || item.category === selectedEquipmentCategory;
+    const queryMatched = !query || `${item.name} ${item.category}`.toLocaleUpperCase("ko-KR").includes(query);
+    return categoryMatched && queryMatched
+  });
+  const filtered = selectedEquipmentCategory || query;
+  document.querySelector("#equipmentSummary").textContent = `${activeDrawing.displayName} · 문서 기준 장비 ${documentedEquipment.length.toLocaleString("ko-KR")}개${filtered ? ` · 필터 결과 ${rows.length.toLocaleString("ko-KR")}개` : ""}`;
   document.querySelector("#equipmentList").innerHTML = rows.length ? rows.slice(0, 5000).map((item, index) => `
     <button class="equipment-row" data-index="${activeDrawing.equipment.indexOf(item)}">
       <span class="equipment-number">${index + 1}</span>
@@ -181,6 +249,12 @@ function renderEquipmentList() {
   `).join("") : '<div class="empty-row">해당 장비명이 없습니다.</div>';
   for (const row of document.querySelectorAll(".equipment-row")) {
     row.onclick = () => focusEquipment(activeDrawing.equipment[Number(row.dataset.index)], row)
+  }
+  for (const filter of document.querySelectorAll(".equipment-filter")) {
+    filter.onclick = () => {
+      selectedEquipmentCategory = filter.dataset.category || "";
+      renderEquipmentList()
+    }
   }
 }
 
@@ -213,6 +287,7 @@ async function renderActiveDrawing() {
 async function selectDrawing(id) {
   activeDrawing = drawings.find(drawing => drawing.id === id);
   if (!activeDrawing) return;
+  selectedEquipmentCategory = "";
   document.querySelector("#activeDrawingName").textContent = activeDrawing.displayName;
   document.querySelector("#activeDrawingDescription").textContent = `${activeDrawing.originalName} · ${formatBytes(activeDrawing.file.size)} · ${activeDrawing.codepage || "코드페이지 미확인"}${activeDrawing.description ? ` · ${activeDrawing.description}` : ""}`;
   deleteButton.disabled = false;
@@ -334,9 +409,16 @@ async function initialize() {
     await loadEquipmentPriorities();
     drawings = (await getDrawings()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const drawing of drawings) {
+      if (drawing.analysisVersion === ANALYSIS_VERSION) {
+        drawing.equipment = (drawing.equipment || [])
+          .filter(item => item.priority < Number.MAX_SAFE_INTEGER)
+          .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}));
+        continue
+      }
       drawing.equipment = (drawing.equipment || []).map(item => {
         const sourceName = cleanCadText(item.sourceName || item.name || ""), classification = equipmentPriority(sourceName);
-        return {...item, sourceName, name: classification.priority < Number.MAX_SAFE_INTEGER ? equipmentLabel(sourceName, classification) : "", ...classification}
+        const baseName = classification.priority < Number.MAX_SAFE_INTEGER ? equipmentLabel(sourceName, classification) : "";
+        return {...item, sourceName, name: item.panelName ? `${baseName} · ${item.panelName}` : baseName, ...classification}
       }).filter(item => item.priority < Number.MAX_SAFE_INTEGER)
         .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ko", {numeric: true}))
     }

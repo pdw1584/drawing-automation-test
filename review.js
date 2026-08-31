@@ -178,7 +178,11 @@ $("#drawingFile").onchange = event => {
 
 $("#documentFiles").onchange = event => {
   state.documents = [...event.target.files];
-  $("#documentNames").textContent = state.documents.length ? state.documents.map(file => file.name).join(" · ") : "시방서·승인서 등을 여러 개 선택할 수 있습니다.";
+  const documentNames = state.documents.map(file => file.name);
+  $("#documentNames").textContent = state.documents.length
+    ? `선택 ${state.documents.length}개\n${documentNames.map((name, index) => `${index + 1}. ${name}`).join("\n")}`
+    : "시방서·승인서 등을 여러 개 선택할 수 있습니다.";
+  $("#documentNames").title = documentNames.join("\n");
   updateReadyState()
 };
 
