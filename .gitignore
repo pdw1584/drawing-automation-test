@@ -6,3 +6,4 @@ npm-debug.log*
 .chrome-*/
 server-smoke*.log
 data/
+TEMP/

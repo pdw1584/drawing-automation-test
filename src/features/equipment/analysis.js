@@ -4,7 +4,7 @@ let equipmentPriorities = [];
 
 // 판넬명이 장비 약어와 별도 TEXT/MTEXT 객체로 작성되는 장비만 좌표 기반 연결을 수행한다.
 // 다른 장비까지 무조건 연결하면 근처의 층/구역 표기가 잘못 붙을 가능성이 높다.
-const PANEL_LINK_CATEGORIES = new Set(["UPS", "STS", "Battery", "변압기", "HV", "LV", "RF"]);
+const PANEL_LINK_CATEGORIES = new Set(["UPS", "STS", "CTTS", "Battery", "변압기", "TR", "SC", "MHV", "HV", "LV", "RF"]);
 
 /** 서버의 equipment-priority.json을 분석 모듈에 주입한다. 배열 순서가 목록 정렬 우선순위다. */
 export function configureEquipmentPriorities(priorities) {
@@ -12,6 +12,16 @@ export function configureEquipmentPriorities(priorities) {
 }
 
 export {cleanCadText};
+
+function isStrictTrEquipmentName(value) {
+  // TR은 도면의 중량·전압·다른 장비 설명 앞에도 자주 등장하므로 일반 부분 검색을 쓰지 않는다.
+  // 단독 장비명 또는 A-6F-TR-01처럼 '-'/'_'로 분리된 구조화 태그만 인정한다.
+  const upper = cleanCadText(value).toLocaleUpperCase("ko-KR").trim();
+  if (["TR", "TRANSFORMER", "변압기"].includes(upper)) return true;
+  if (/\s/.test(upper) || !/\d/.test(upper)) return false;
+  const tokens = upper.split(/[-_]/).filter(Boolean);
+  return tokens.length >= 2 && tokens.includes("TR")
+}
 
 export function equipmentPriority(name) {
   const upperName = name.toLocaleUpperCase("ko-KR");
@@ -25,7 +35,10 @@ export function equipmentPriority(name) {
       const matched = alias.length <= 3
         ? new RegExp(`(^|[^A-Z0-9가-힣])${escapedAlias}([^A-Z0-9가-힣]|$)`).test(upperName)
         : upperName.replace(/[\s_-]/g, "").includes(alias.replace(/[\s_-]/g, ""));
-      if (matched) return {priority: index, category: definition.name}
+      if (matched) {
+        if (definition.name === "TR" && !isStrictTrEquipmentName(name)) continue;
+        return {priority: index, category: definition.name}
+      }
     }
   }
   return {priority: Number.MAX_SAFE_INTEGER, category: ""}
@@ -47,7 +60,8 @@ export function equipmentLabel(sourceName, classification) {
 function panelNameFromText(value) {
   // 일반 판넬 표기: 5F-1D-3, 5F_1D_3, 5F/1D/3 등을 하나의 형식으로 정규화한다.
   const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
-  const matches = text.match(/(?:B?\d{1,2}F|RF|PH)(?:\s*[-_/]\s*[A-Z0-9]{1,8}){1,4}/g) || [];
+  // 6층 전산실 계통은 층 번호 대신 CR 또는 CRB로 시작한다.
+  const matches = text.match(/(?:CRB?|B?\d{1,2}F|RF|PH)(?:\s*[-_/]\s*[A-Z0-9]{1,8}){1,4}/g) || [];
   const match = matches.find(name => !/(?:UPS|STS|BAT|TR)/.test(name));
   return match ? match.replace(/\s*[-_/]\s*/g, "-") : ""
 }
@@ -60,6 +74,14 @@ function rfPanelNameFromText(value) {
   return match ? match[1].replace(/\s*[-_/]\s*/g, "-") : ""
 }
 
+function shortElectricalPanelNameFromText(value) {
+  // 일부 층의 UPS/Battery/CTTS/MHV/LV/HV/SC 판넬은 층/CR 접두어 없이 다음과 같은 단축 형식을 사용한다.
+  // 1A-PT, 1A-1, 1C, C1-PT, C1-1, BU-1-PT, OM-1, OF-1, 1BB, 1BA
+  const text = cleanCadText(value).toLocaleUpperCase("ko-KR");
+  const match = text.match(/(?:^|[^A-Z0-9])((?:\d{1,3}[A-Z]\s*[-_/]\s*(?:PT|\d{1,3})|[A-Z]{1,4}\d{1,3}\s*[-_/]\s*(?:PT|\d{1,3})|[A-Z]{1,4}\s*[-_/]\s*\d{1,3}(?:\s*[-_/]\s*PT)?|\d{1,3}[A-Z]{1,2}))(?:[^A-Z0-9]|$)/);
+  return match ? match[1].replace(/\s*[-_/]\s*/g, "-") : ""
+}
+
 const distanceBetween = (first, second) => Math.hypot(first.x - second.x, first.y - second.y);
 
 function attachNearbyPanelNames(equipment, textItems) {
@@ -69,12 +91,25 @@ function attachNearbyPanelNames(equipment, textItems) {
     ...item,
     panelName: panelNameFromText(item.text || "") ? "" : rfPanelNameFromText(item.text || "")
   })).filter(item => item.panelName);
-  if (!panels.length && !rfPanels.length) return equipment;
+  const shortElectricalPanels = (textItems || []).map(item => ({
+    ...item,
+    panelName: panelNameFromText(item.text || "") ? "" : shortElectricalPanelNameFromText(item.text || "")
+  })).filter(item => item.panelName);
+  if (!panels.length && !rfPanels.length && !shortElectricalPanels.length) return equipment;
 
   const linkable = equipment.filter(item => PANEL_LINK_CATEGORIES.has(item.category));
+  // 실험용 광역 매칭: 지금까지 판넬로 확인된 일반 형식과 단축 전기 형식을
+  // 특정 장비군에 한정하지 않고 모든 판넬 연결 대상에 공통 적용한다.
+  // 사용자 검토 후 되돌리기 쉽도록 후보군 결합을 이 지점에서만 수행한다.
+  const broadPanelCandidates = [...panels, ...shortElectricalPanels];
   for (const item of linkable) {
     // RF는 짧은 구역 번호만, 나머지는 층이 포함된 판넬명만 후보로 사용한다.
-    const panelCandidates = item.category === "RF" ? rfPanels : panels;
+    // RF는 기존 층에서 짧은 구역 번호를 사용하지만, 6층에서는 인접한 CR/CRB
+    // 판넬도 후보에 포함한다. 최종 선택은 실제 도면 좌표상 거리로 결정한다.
+    const crPanels = panels.filter(panel => /^CRB?(?:-|$)/.test(panel.panelName));
+    const panelCandidates = item.category === "RF"
+      ? [...crPanels, ...rfPanels]
+      : broadPanelCandidates;
     const nearestPanel = panelCandidates.map(panel => ({panel, distance: distanceBetween(item, panel)}))
       .sort((a, b) => a.distance - b.distance)[0];
     if (!nearestPanel) continue;

@@ -3,7 +3,7 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo [도면자동화 v0.1] 실행 준비 중...
+echo [도면자동화 v0.8.0] 실행 준비 중...
 
 where node >nul 2>nul
 if errorlevel 1 (

@@ -536,6 +536,7 @@ button:disabled {
 }
 
 .render-file-picker {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -552,11 +553,17 @@ button:disabled {
   background: #122538;
 }
 
-.render-file-picker input {
+.equipment-form-grid .render-file-picker input[type="file"] {
   position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
+  width: 1px;
+  height: 1px;
+  inset: 0 auto auto 0;
+  padding: 0;
+  border: 0;
   opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  clip-path: inset(50%);
 }
 
 .render-file-picker > span:last-child {
