@@ -8,7 +8,7 @@ import {
 import {getDrawings, removeDrawing, saveDrawing} from "./store.js";
 import {escapeHtml, formatBytes} from "../../shared/ui-utils.js";
 
-const ANALYSIS_VERSION = 8;
+const ANALYSIS_VERSION = 9;
 
 // 분석 규칙 버전이다. 장비/판넬 매칭 규칙이 바뀌면 값을 올려 기존 도면을
 // 최초 선택 시 한 번만 재분석한다. IndexedDB 자체의 스키마 버전과는 별개다.

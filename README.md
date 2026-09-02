@@ -25,6 +25,8 @@ npm start
 - `src/shared/`: CAD iframe 연결, DXF 인코딩·문자 정리, 공통 UI 함수
 - `src/cad/`: iframe 내부 CAD 렌더러
 - `src/workers/`: 대용량 DXF 백그라운드 분석 Worker
+- `server_modules/`: multipart, 문서 추출·검토, PDF 비교, DWG 변환, HTTP 처리
+- `tests/frontend/`, `tests/server/`: 프런트엔드 및 Python 서버 회귀 테스트
 - `server.py`: 정적 파일, 문서 검토, 변환 API 서버
 
 이미 의존성을 설치했다면 다음 명령만 실행합니다.

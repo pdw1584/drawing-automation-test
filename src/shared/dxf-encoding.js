@@ -38,6 +38,13 @@ export function detectDxfEncoding(buffer) {
   const header = new TextDecoder("windows-1252").decode(bytes.subarray(0, Math.min(bytes.length, 262144)));
   const match = header.match(/\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*([^\r\n]+)/i);
   const codepage = match?.[1].trim().toUpperCase() || "";
+  const hasNonAscii = bytes.some(byte => byte >= 0x80);
+  const frequentlyMisdeclared = new Set(["ANSI_1252", "ANSI_949", "DOS949", "KSC5601"]);
+  // 전체 바이트가 엄격한 UTF-8이고 실제 비ASCII 문자가 존재하면 바이트 자체가 가장
+  // 강한 근거다. 특히 UTF-8 한글인데 헤더만 ANSI_949인 변환 도면이 자주 발생한다.
+  if (validUtf8 && hasNonAscii && (!codepage || frequentlyMisdeclared.has(codepage))) {
+    return {encoding: "utf-8", codepage: codepage ? `${codepage} → UTF-8 보정` : "UTF-8"}
+  }
   if (CODEPAGE_LABELS.has(codepage)) return {encoding: CODEPAGE_LABELS.get(codepage), codepage};
   // 일부 프로그램은 실제 UTF-8 DXF에도 ANSI_1252를 기록한다. UTF-8 바이트 검증을
   // 통과한 파일을 CP949 후보로 다시 해석하면 `지하층`이 `移쒖...`처럼 변형된다.

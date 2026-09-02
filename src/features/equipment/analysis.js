@@ -93,7 +93,7 @@ function attachNearbyPanelNames(equipment, textItems) {
   return equipment
 }
 
-function equipmentCandidates(textItems) {
+export function equipmentCandidates(textItems) {
   const seen = new Set(), equipment = [];
   for (const item of textItems || []) {
     const name = cleanCadText(item.text || "");
