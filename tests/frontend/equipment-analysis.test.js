@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {configureEquipmentPriorities, equipmentCandidates} from "../../src/features/equipment/analysis.js";
+import {applyEquipmentCorrections, equipmentCorrectionKey} from "../../src/features/equipment/corrections.js";
 
 configureEquipmentPriorities([
   {name: "UPS", aliases: ["UPS"]},
@@ -198,6 +199,32 @@ test("TR은 사양 문구를 제외하고 단독명과 구조화 태그만 장�
   ];
   const equipment = equipmentCandidates(items);
   assert.deepEqual(equipment.map(item => item.sourceName), ["A-6F-TR-01", "TR"]);
+});
+
+test("사용자 판넬 교정과 제외 상태를 자동 분석 결과 위에 적용한다", () => {
+  const item = {sourceName: "UPS", name: "UPS · CR-1-1", panelName: "CR-1-1", x: 100, y: 200};
+  const key = equipmentCorrectionKey(item);
+  const [corrected] = applyEquipmentCorrections([item], {
+    [key]: {panelName: "C1-1", excluded: true}
+  }, () => "UPS");
+  assert.equal(corrected.autoPanelName, "CR-1-1");
+  assert.equal(corrected.panelName, "C1-1");
+  assert.equal(corrected.name, "UPS · C1-1");
+  assert.equal(corrected.userExcluded, true);
+  assert.equal(corrected.userCorrected, true);
+  assert.equal(corrected.panelMatchConfidence, "manual");
+  assert.equal(corrected.panelMatchDistance, null);
+});
+
+test("빈 판넬 교정은 자동 연결을 해제하고 교정 삭제 시 자동값을 복원한다", () => {
+  const item = {sourceName: "HV", name: "HV · 1A-PT", panelName: "1A-PT", x: 10, y: 20};
+  const key = equipmentCorrectionKey(item);
+  const [unlinked] = applyEquipmentCorrections([item], {[key]: {panelName: "", excluded: false}}, () => "HV");
+  const [restored] = applyEquipmentCorrections([item], {}, () => "HV");
+  assert.equal(unlinked.name, "HV");
+  assert.equal(unlinked.panelName, "");
+  assert.equal(unlinked.panelMatchConfidence, "unmatched");
+  assert.equal(restored.name, "HV · 1A-PT");
 });
 
 test("RF에는 짧은 구역 번호를 연결하고 UPS 판넬은 제외한다", () => {

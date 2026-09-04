@@ -1,34 +1,40 @@
-@echo off
+﻿@echo off
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo [도면자동화 v0.8.0] 실행 준비 중...
+echo [도면자동화 v0.9.6] 실행 준비 중...
 
-where node >nul 2>nul
+node --version >nul 2>nul
 if errorlevel 1 (
   echo [오류] Node.js를 찾을 수 없습니다. Node.js 20.19 이상을 설치하세요.
   pause
   exit /b 1
 )
 
-where python >nul 2>nul
-if errorlevel 1 (
+set "PYTHON_CMD="
+python --version >nul 2>nul
+if not errorlevel 1 set "PYTHON_CMD=python"
+if not defined PYTHON_CMD (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 set "PYTHON_CMD=py -3"
+)
+if not defined PYTHON_CMD (
   echo [오류] Python을 찾을 수 없습니다. Python 3을 설치하고 PATH에 추가하세요.
   pause
   exit /b 1
 )
 
-if not exist "node_modules\" (
+if not exist "node_modules" (
   echo Node 패키지를 처음 설치합니다...
   call npm install
   if errorlevel 1 goto :failed
 )
 
-python -c "import fitz" >nul 2>nul
+%PYTHON_CMD% -c "import fitz" >nul 2>nul
 if errorlevel 1 (
   echo Python 패키지를 처음 설치합니다...
-  python -m pip install -r requirements.txt
+  %PYTHON_CMD% -m pip install -r requirements.txt
   if errorlevel 1 goto :failed
 )
 
@@ -40,7 +46,7 @@ echo.
 echo 서버 주소: http://127.0.0.1:8000
 echo 종료하려면 이 창에서 Ctrl+C를 누르세요.
 echo.
-python server.py
+%PYTHON_CMD% server.py
 if errorlevel 1 goto :failed
 exit /b 0
 

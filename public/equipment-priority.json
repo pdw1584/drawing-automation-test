@@ -14,7 +14,7 @@
   {"name":"BUS TIE","aliases":["BUS TIE","BUSTIE"]},
   {"name":"AC & B/C","aliases":["AC & B/C","AC&B/C","AC B/C"]},
   {"name":"BATT & DC","aliases":["BATT & DC","BATT&DC","BATTERY & DC"]},
-  {"name":"Load Bank","aliases":["LOAD BANK","부하시험기"]},
+  {"name":"Load Bank","aliases":["LOAD BANK","부하시험기","로드 뱅크","로드뱅크"]},
   {"name":"UPS","aliases":["UPS","무정전전원장치"]},
   {"name":"STS","aliases":["STS","STATIC TRANSFER SWITCH"]},
   {"name":"CTTS","aliases":["CTTS","CLOSED TRANSITION TRANSFER SWITCH"]},

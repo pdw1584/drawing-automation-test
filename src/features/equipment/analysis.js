@@ -98,9 +98,8 @@ function attachNearbyPanelNames(equipment, textItems) {
   if (!panels.length && !rfPanels.length && !shortElectricalPanels.length) return equipment;
 
   const linkable = equipment.filter(item => PANEL_LINK_CATEGORIES.has(item.category));
-  // 실험용 광역 매칭: 지금까지 판넬로 확인된 일반 형식과 단축 전기 형식을
-  // 특정 장비군에 한정하지 않고 모든 판넬 연결 대상에 공통 적용한다.
-  // 사용자 검토 후 되돌리기 쉽도록 후보군 결합을 이 지점에서만 수행한다.
+  // 일반 형식과 단축 전기 형식의 판넬 후보를 한곳에서 결합해 모든 연결 대상에 공통 적용한다.
+  // 후보 생성과 장비별 선택을 분리해 판넬 형식이 추가돼도 거리·신뢰도 계산은 그대로 재사용한다.
   const broadPanelCandidates = [...panels, ...shortElectricalPanels];
   for (const item of linkable) {
     // RF는 짧은 구역 번호만, 나머지는 층이 포함된 판넬명만 후보로 사용한다.
@@ -110,8 +109,9 @@ function attachNearbyPanelNames(equipment, textItems) {
     const panelCandidates = item.category === "RF"
       ? [...crPanels, ...rfPanels]
       : broadPanelCandidates;
-    const nearestPanel = panelCandidates.map(panel => ({panel, distance: distanceBetween(item, panel)}))
-      .sort((a, b) => a.distance - b.distance)[0];
+    const rankedPanels = panelCandidates.map(panel => ({panel, distance: distanceBetween(item, panel)}))
+      .sort((a, b) => a.distance - b.distance);
+    const nearestPanel = rankedPanels[0];
     if (!nearestPanel) continue;
 
     // 도면마다 단위(mm 등)와 문자 높이가 다르므로 고정 거리 대신 문자 크기와
@@ -120,10 +120,22 @@ function attachNearbyPanelNames(equipment, textItems) {
       .reduce((nearest, peer) => Math.min(nearest, distanceBetween(item, peer)), Number.POSITIVE_INFINITY);
     const textScaleLimit = Math.max(item.height || 0, nearestPanel.panel.h || 0, 1) * 100;
     const peerLimit = Number.isFinite(nearestPeerDistance) ? nearestPeerDistance * 2 : 0;
-    if (nearestPanel.distance > Math.max(textScaleLimit, peerLimit)) continue;
+    const distanceLimit = Math.max(textScaleLimit, peerLimit);
+    if (nearestPanel.distance > distanceLimit) continue;
 
     item.panelName = nearestPanel.panel.panelName;
-    item.name = `${item.name} · ${item.panelName}`
+    item.name = `${item.name} · ${item.panelName}`;
+    item.panelMatchDistance = nearestPanel.distance;
+    item.panelMatchLimit = distanceLimit;
+    item.panelCandidateCount = rankedPanels.length;
+    const distanceRatio = nearestPanel.distance / Math.max(distanceLimit, 1);
+    const secondDistance = rankedPanels[1]?.distance ?? Number.POSITIVE_INFINITY;
+    const ambiguous = secondDistance <= nearestPanel.distance * 1.25 + Math.max(item.height || 1, 1) * 2;
+    item.panelMatchConfidence = distanceRatio <= .35 && !ambiguous
+      ? "high"
+      : distanceRatio <= .72 && !ambiguous
+        ? "medium"
+        : "low"
   }
   return equipment
 }

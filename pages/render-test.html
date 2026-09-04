@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>층별 장비 위치 · 도면자동화 v0.8.0</title>
+  <title>층별 장비 위치 · 도면자동화 v0.9.6</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/features.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="header-brand"><strong>도면자동화 v0.8.0</strong><span>층별 도면 및 장비 위치</span></div>
+    <div class="header-brand"><strong>도면자동화 v0.9.6</strong><span>층별 도면 및 장비 위치</span></div>
     <nav class="main-nav">
       <a href="index.html">도면 비교</a>
       <a href="review.html">문서 기반 검토</a>
@@ -28,6 +28,7 @@
       <div class="render-test-actions">
         <button id="renderFitBtn" class="secondary" disabled>전체 보기</button>
         <button id="reanalyzeDrawingBtn" class="secondary" disabled>장비 다시 분석</button>
+        <button id="reanalyzeAllDrawingsBtn" class="secondary" disabled>전체 도면 재분석</button>
         <button id="deleteDrawingBtn" class="danger" disabled>선택 도면 삭제</button>
       </div>
     </section>
@@ -48,7 +49,10 @@
 
     <section class="equipment-workspace">
       <aside class="panel drawing-library">
-        <div class="equipment-panel-head"><h2>등록 도면</h2><span id="drawingCount">0개</span></div>
+        <div class="equipment-panel-head">
+          <h2>등록 도면</h2>
+          <div class="drawing-library-actions"><span id="drawingCount">0개</span><button id="toggleDrawingEditModeBtn" type="button" class="secondary" disabled>목록 수정</button></div>
+        </div>
         <div id="drawingList" class="drawing-list"><div class="empty-row">등록된 도면이 없습니다.</div></div>
       </aside>
 
@@ -64,12 +68,127 @@
     <section class="panel equipment-results">
       <div class="equipment-results-head">
         <div><h2>장비 목록</h2><p id="equipmentSummary">도면을 선택하면 문서 기준 장비가 표시됩니다.</p></div>
-        <input id="equipmentSearch" type="search" placeholder="장비명 검색" disabled>
+        <div class="equipment-list-actions">
+          <button id="equipmentSummaryBtn" type="button" class="secondary">수량 집계</button>
+          <button id="exportEquipmentBtn" type="button" class="secondary">Excel 내보내기</button>
+          <label class="secondary dictionary-import-button">Excel 가져오기<input id="importEquipmentFile" type="file" accept=".xls,.xml,application/vnd.ms-excel,application/xml,text/xml"></label>
+          <button id="manageEquipmentDictionaryBtn" type="button" class="secondary">검출 장비 관리</button>
+          <input id="equipmentSearch" type="search" placeholder="장비명 검색" disabled>
+        </div>
       </div>
       <div id="equipmentFilters" class="equipment-filters" aria-label="장비 종류 필터"></div>
+      <div id="equipmentBulkActions" class="equipment-bulk-actions">
+        <button id="selectVisibleEquipmentBtn" type="button" class="secondary">현재 목록 전체 선택</button>
+        <span id="selectedEquipmentCount">0개 선택</span>
+        <button id="markSelectedReviewedBtn" type="button" class="secondary" disabled>선택 확인 완료</button>
+        <button id="markSelectedUnreviewedBtn" type="button" class="secondary" disabled>선택 미검토로 변경</button>
+        <button id="markSelectedNeedsRevisionBtn" type="button" class="secondary" disabled>선택 수정 필요</button>
+        <button id="excludeSelectedEquipmentBtn" type="button" class="danger" disabled>선택 장비 제외</button>
+        <button id="clearEquipmentSelectionBtn" type="button" class="secondary" disabled>선택 해제</button>
+      </div>
       <div id="equipmentList" class="equipment-list"><div class="empty-row">선택된 도면이 없습니다.</div></div>
     </section>
   </main>
+
+  <dialog id="equipmentCorrectionDialog" class="equipment-correction-dialog">
+    <form id="equipmentCorrectionForm" method="dialog">
+      <div class="correction-dialog-head">
+        <div><h2>장비 교정</h2><p id="correctionSourceText"></p></div>
+        <button type="button" id="closeCorrectionBtn" class="dialog-close" aria-label="닫기">×</button>
+      </div>
+      <label><span>자동 판넬명</span><input id="automaticPanelName" type="text" readonly></label>
+      <label><span>확정 판넬명</span><input id="correctedPanelName" type="text" placeholder="비워두면 판넬 연결 해제"></label>
+      <label><span>검수 상태</span><select id="equipmentReviewStatus"><option value="unreviewed">미검토</option><option value="reviewed">확인 완료</option><option value="needs_revision">수정 필요</option></select></label>
+      <label class="correction-exclude"><input id="excludeEquipment" type="checkbox"><span>장비 목록에서 제외</span></label>
+      <p>사용자 교정값은 자동 재분석보다 우선하며 이 브라우저의 도면 데이터에 저장됩니다.</p>
+      <div class="correction-dialog-actions">
+        <button type="button" id="resetCorrectionBtn" class="secondary">자동 결과로 복원</button>
+        <button type="button" id="cancelCorrectionBtn" class="secondary">취소</button>
+        <button type="submit">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="drawingEditDialog" class="equipment-correction-dialog">
+    <form id="drawingEditForm" method="dialog">
+      <div class="correction-dialog-head">
+        <div><h2>등록 도면 정보 수정</h2><p id="editingDrawingOriginalName"></p></div>
+        <button type="button" id="closeDrawingEditBtn" class="dialog-close" aria-label="닫기">×</button>
+      </div>
+      <label><span>표시 이름</span><input id="editingDrawingDisplayName" type="text" required></label>
+      <label><span>설명</span><textarea id="editingDrawingDescription" rows="4" placeholder="도면이나 해당 층에 대한 설명"></textarea></label>
+      <p>원본 DXF 파일명과 분석된 장비 데이터는 변경되지 않습니다.</p>
+      <div class="correction-dialog-actions">
+        <button type="button" id="cancelDrawingEditBtn" class="secondary">취소</button>
+        <button type="submit">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="equipmentReportDialog" class="equipment-correction-dialog equipment-report-dialog">
+    <form method="dialog">
+      <div class="correction-dialog-head">
+        <div><h2>층별 장비 수량 집계</h2><p id="equipmentReportSummary"></p></div>
+        <button type="button" id="closeEquipmentReportBtn" class="dialog-close" aria-label="닫기">×</button>
+      </div>
+      <div id="equipmentTotalBubbles" class="equipment-total-bubbles"></div>
+      <div class="equipment-report-table-wrap">
+        <table class="equipment-report-table">
+          <thead><tr><th>도면</th><th>장비 분류</th><th>수량</th></tr></thead>
+          <tbody id="equipmentReportRows"></tbody>
+        </table>
+      </div>
+      <div class="correction-dialog-actions">
+        <button type="button" id="reportExportEquipmentBtn">Excel 내보내기</button>
+        <button type="button" id="cancelEquipmentReportBtn" class="secondary">닫기</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="equipmentDictionaryDialog" class="equipment-correction-dialog equipment-dictionary-dialog">
+    <form id="equipmentDictionaryForm" method="dialog">
+      <div class="correction-dialog-head">
+        <div><h2>자동 검출 장비 관리</h2><p>새 분류와 도면에서 검색할 장비명·약어를 등록합니다.</p></div>
+        <button type="button" id="closeEquipmentDictionaryBtn" class="dialog-close" aria-label="닫기">×</button>
+      </div>
+      <label><span>목록 표시 분류명</span><input id="dictionaryEquipmentName" type="text" placeholder="예: ATS" required></label>
+      <label><span>검출 이름 또는 약어</span><textarea id="dictionaryEquipmentAliases" rows="3" placeholder="예: ATS, AUTO TRANSFER SWITCH&#10;쉼표 또는 줄바꿈으로 여러 개 입력" required></textarea></label>
+      <p>같은 분류명을 입력하면 기존 기본 분류에 별칭을 추가합니다. 설정은 이 브라우저에 저장됩니다.</p>
+      <section class="dictionary-transfer">
+        <div>
+          <button type="button" id="exportEquipmentDictionaryBtn" class="secondary">JSON 내보내기</button>
+          <label class="secondary dictionary-import-button">JSON 가져오기<input id="importEquipmentDictionaryFile" type="file" accept=".json,application/json"></label>
+          <button type="button" id="restoreEquipmentDictionaryBtn" class="secondary">이전 사전 복구</button>
+        </div>
+        <label><span>가져오기 방식</span><select id="equipmentDictionaryImportMode"><option value="merge">기존 규칙과 병합</option><option value="replace">사용자 규칙 전체 교체</option></select></label>
+        <p id="equipmentDictionaryTransferStatus">사용자 등록 규칙만 내보내며 프로젝트 기본 사전은 변경하지 않습니다.</p>
+      </section>
+      <div class="correction-dialog-actions">
+        <button type="button" id="cancelEquipmentDictionaryBtn" class="secondary">취소</button>
+        <button type="submit">검출 규칙 등록</button>
+      </div>
+      <section class="custom-equipment-rules">
+        <h3>사용자 등록 규칙</h3>
+        <div id="customEquipmentRuleList"></div>
+      </section>
+    </form>
+  </dialog>
+
+  <dialog id="batchAnalysisDialog" class="equipment-correction-dialog batch-analysis-dialog">
+    <form method="dialog">
+      <div class="correction-dialog-head">
+        <div><h2>전체 도면 장비 재분석</h2><p id="batchAnalysisSummary">작업을 준비하고 있습니다.</p></div>
+        <button type="button" id="closeBatchAnalysisBtn" class="dialog-close" aria-label="닫기" disabled>×</button>
+      </div>
+      <progress id="batchAnalysisProgress" value="0" max="1"></progress>
+      <div id="batchAnalysisResults" class="batch-analysis-results"></div>
+      <div class="correction-dialog-actions">
+        <button type="button" id="cancelBatchAnalysisBtn" class="danger">분석 중단</button>
+        <button type="button" id="finishBatchAnalysisBtn" class="secondary" disabled>닫기</button>
+      </div>
+    </form>
+  </dialog>
+
   <script type="module" src="/src/features/equipment/page.js"></script>
 </body>
 </html>
